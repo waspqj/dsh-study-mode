@@ -14,13 +14,13 @@
   ],
   "license": "MIT",
   "author": "waspqj <3555956402@qq.com>",
-  "homepage": "https://github.com/waspqj/dsh-study-mode#readme",
+  "homepage": "https://gitee.com/waspqj/dsh-study-mode#readme",
   "bugs": {
-    "url": "https://github.com/waspqj/dsh-study-mode/issues"
+    "url": "https://gitee.com/waspqj/dsh-study-mode/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/waspqj/dsh-study-mode.git"
+    "url": "https://gitee.com/waspqj/dsh-study-mode.git"
   },
   "type": "module",
   "main": "./plugin/index.js",

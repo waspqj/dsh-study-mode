@@ -20,12 +20,12 @@ DSH 的「插件」页 →「添加插件」→「安装第三方插件」，**�
 | 方式 | 填什么 | 前提 / 注意 |
 | --- | --- | --- |
 | **npm 包名** | `dsh-study-mode` | 需要先 `npm publish`；国内可在「安装源」选 npmmirror 镜像 |
+| **Gitee 仓库** | `git+https://gitee.com/waspqj/dsh-study-mode.git` | **必须带 `git+` 前缀**。裸 `https://gitee.com/…/仓库` 会被当成 tarball 去下载，拉回 HTML 页面导致安装失败 |
 | **GitHub 仓库** | `https://github.com/waspqj/dsh-study-mode` | 直接可用（宿主认得 github.com）。也可写 `git+https://github.com/waspqj/dsh-study-mode.git` |
-| **Gitee 仓库** | `git+https://gitee.com/<你>/dsh-study-mode.git` | **必须带 `git+` 前缀**。裸 `https://gitee.com/…/仓库` 会被当成 tarball 去下载，拉回 HTML 页面导致安装失败 |
 | **tarball** | `https://…/dsh-study-mode-0.3.10.tgz` | 或本地绝对路径 `C:\path\to\dsh-study-mode-0.3.10.tgz` |
 | **本地目录** | `C:\path\to\dsh-study-mode` | 开发者用 |
 
-装 GitHub 版就填 `https://github.com/waspqj/dsh-study-mode`。
+装 Gitee 版就填 `git+https://gitee.com/waspqj/dsh-study-mode.git`。
 
 装完**重启 DSH** 最保险：bundle 行是启动时装配的（本机实测热加载也能生效，但换版本时容易吃到旧缓存）。
 「安装源」可选：默认 / npm 官方源 / 中国大陆镜像 / 自定义地址（凭据放 `~/.npmrc`）。
