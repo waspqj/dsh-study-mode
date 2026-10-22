@@ -33,6 +33,8 @@
   "files": [
     "plugin/",
     "client/",
+    "test/",
+    "scripts/",
     "cordis.patch.yml",
     "icon.svg",
     "README.md",
