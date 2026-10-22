@@ -633,7 +633,7 @@ export function apply(ctx) {
         cards: {
           type: 'array',
           description:
-            '一张或多张知识卡片。每张必须有 title 和 body；body 按「结论先行 + 每行一个要点（行首 "- "）+ 关键术语 **粗体** + 命令 `反引号`」的格式写，面板会按这个渲染成一��段；tags 给 2-5 个；kind 默认 point，问答类用 qa 并把问题原文放进 q；source 写 {type: user|file|web|model, ref: 出处说明, locator: 页码}；verified 表示用户是否核实过；appliesTo 写适用范围。',
+            '一张或多张知识卡片。每张必须有 title 和 body；body 格式见 body 参数说明；tags 给 2-5 个；kind 默认 point，问答类用 qa 并把问题原文放进 q；source 写 {type: user|file|web|model, ref: 出处说明, locator: 页码}；verified 表示用户是否核实过；appliesTo 写适用范围。',
           items: {
             type: 'object',
             properties: {
@@ -641,7 +641,7 @@ export function apply(ctx) {
               body: {
                 type: 'string',
                 description:
-                  '正文，≤400 字。格式（面板按这个渲染，不要写成一整段）：第一行结论；之后每行一个要点，行首 "- "；命令/参数/字段名/路径一律用 `反引号` 包起来（面板会显示成等宽小块，和正文区分开）；关键术语用 **粗体**；重点用 【】 包住。内容标准：长短按信息量定，不为凑短删参数或数字，也不为凑详细硬加解释；不重复标题里已有的字。',
+                  '正文，≤400 字。格式：首行结论；之后每行一个要点，行首 "- "；参数/命令用 `反引号`，术语 **粗体**，重点 【】。长短按信息量定，不删参数数字。',
               },
               tags: { type: 'array', items: { type: 'string' }, description: '2-5 个标签' },
               kind: { type: 'string', enum: ['point', 'qa'], description: 'point（知识点，默认）| qa（问答）' },
