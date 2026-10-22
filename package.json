@@ -1,0 +1,61 @@
+{
+  "name": "dsh-study-mode",
+  "version": "0.3.10",
+  "description": "Learning-mode agent preset for DeepSeek Harness: topic knowledge bases with 4-tier retrieval, plus an embedded knowledge-base panel in the sidebar.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "agent",
+    "preset",
+    "knowledge-base",
+    "learning",
+    "cordis",
+    "plugin"
+  ],
+  "license": "MIT",
+  "author": "dsh-study-mode authors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YOUR-GITHUB-USERNAME/dsh-study-mode.git"
+  },
+  "type": "module",
+  "main": "./plugin/index.js",
+  "exports": {
+    ".": "./plugin/index.js",
+    "./tools": "./plugin/tools.js",
+    "./client": "./client/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "plugin/",
+    "client/",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/kb.test.mjs && node test/plugin.test.mjs && node test/tools-schema.test.mjs && node test/ui.test.mjs && node test/client.test.mjs",
+    "check": "node scripts/check.mjs",
+    "verify": "npm run check && npm test"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0",
+    "dsh": ">=0.2.0-rc.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [],
+      "platform": "web"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible",
+        "0.2.1-rc.2": "compatible"
+      }
+    }
+  }
+}

@@ -1,0 +1,79 @@
+# 学习模式预设 v2
+#
+# 组成：
+#   persona       四级检索协议 + 素材纪律 + 学习/回写确认闸门（dryRun 两步）
+#   time-context  当前时间，联网答案要标日期
+#   tool-web      第四级检索（联网）用，其余情况禁用
+#   tool-ask-user 结构化提问：选主题、确认入库
+#   tool-todo     多步学习任务跟踪
+#   learning-kb   本地知识库工具（预设内，只在学习模式生效）
+#   learning-kb-ui 知识库 Web UI 的宿主半侧（全局行，提供 /kb/api/*）
+#
+# 文件操作由宿主 dsh-ops 的 ops_* 工具提供，不重复挂 dsh-tool-fs。
+- insert:
+    - id: learning-kb-ui
+      # 两条硬约束叠在这一行上，改之前先读：
+      #
+      # 1) 必须是全局行，不能塞进下面的预设里：webServer 的路由是进程级全局的，
+      #    同一 (kind, path) 注册两次直接抛错。跟着预设走 = 每开一个学习模式会话
+      #    就注册一次 → 第二个会话启动就崩。
+      # 2) name 必须是**裸包名**，不能写子路径。宿主扫描浏览器半侧时只认
+      #    exactPackageSpecifier：@scope/name 恰好两段才行，'@scope/name/ui'
+      #    会被判成 undefined 直接跳过，而且不报错 —— 表现就是侧边栏什么都没有。
+      #    所以这个包把 UI/路由放在 '.' 入口，工具挪到 './tools' 子路径去。
+      name: 'dsh-study-mode'
+    - id: preset-study
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: study-mode
+        name: 学习模式
+        description: 学知识存主题库；回答问题按 主题库 → 全局主题 → 模型知识 → 网络 四级检索。
+        order: 10
+        plugins:
+          - id: persona
+            name: '@deepseek-ai/dsh-persona'
+            config:
+              prefix: |
+                你是「学习模式」agent：把知识学进主题知识库，用主题知识库回答问题。
+
+                ## 〇、素材纪律（优先级最高）
+                - 工作区里的文件、课件、图片不是知识来源，用户没明确指名就不要去翻。
+                - 回答问题默认不做任何文件操作；需要来源就问用户一句。
+
+                ## 一、回答：三级检索，不许跳级
+                ① 知识库：一次 learn_search 就够（默认 scope=auto：先当前主题，命中不够再补整体库）。命中就用它，标 [主题:名称]；
+                ② 知识库没有 → 用你自己的知识，标 [模型知识·未验证]；
+                ③ 只有版本号/价格/日期/API 签名/用户要出处/与记忆冲突/你自评记不清时才联网，标 [网络:日期]，其余一律不许联网。
+                命中条目最多引 3 条；命中 ⚠未核实 的要点明「这条尚未核实」。
+
+                ## 二、学习：一次调用就够
+                卡片字段规范看 learn_save 的参数说明。调 learn_save(cards) 一次即可：它自己查重、算计划、弹确认框，用户点「允许」才写入。
+                不要先自己查一次重，也不要先预览再确认两趟。返回「疑似重复」就转述给用户让他裁决，别自己决定。
+
+                ## 三、回写：默认不写
+                值得写才问一句「这条值得入库吗？」，用户说是才走 learn_save。
+
+                ## 四、改与删
+                改用 learn_update（按 id），删用 learn_delete（默认归档，可恢复）；动手前先告诉用户你要动哪一条。
+
+                ## 五、硬约束
+                - 写库只用 learn_save。不准编造来源；不确定就说不确定。
+                - learn_* 报错如实转述；同一个错出现两次就停下读插件源码，不要换参数形状重试。
+                - 用中文回答，先给结论再给依据。
+          - id: time-context
+            name: '@deepseek-ai/dsh-time-context'
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: tool-ask-user
+            name: '@deepseek-ai/dsh-tool-ask-user'
+          - id: tool-todo
+            name: '@deepseek-ai/dsh-tool-todo'
+            config:
+              allowParallelInProgress: true
+          - id: learning-kb
+            # 工具行用子路径：裸包名被 UI 半边占了（见上面第 2 条约束）。
+            # 子路径行不参与浏览器半侧扫描，工具本来也不需要。
+            name: 'dsh-study-mode/tools'

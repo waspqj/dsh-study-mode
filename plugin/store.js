@@ -1,0 +1,751 @@
+// 学习模式知识库 · 存储层（v2）
+//
+// 磁盘布局（root 默认 ~/.dsh/learn）：
+//   topics/<slug>/topic.json   主题元数据：显示名、描述、关键词、别名、时间
+//   topics/<slug>/kb.jsonl     知识点，一行一条 JSON
+//   bindings.json              会话 → 当前主题 的绑定
+//
+// v2 相对 v1 的变化：
+//   1. source 结构化：{type: user|file|web|model|unknown, ref, locator}，兼容旧的字符串写法
+//   2. 新增 verified（用户是否核实过）与 appliesTo（适用版本/环境）
+//   3. 新增 status（active|archived），归档条目不参与检索
+//   4. 写入前做 dryRun 计划，支持预览后再落盘
+//   5. 跨主题相似/冲突检测
+//   6. 按 mtime+size 做读取缓存，写入后失效
+//   7. 写入前校验文件是否被其它会话改过（并发保护）
+//
+// 设计取舍：
+//   - 「整体库」不单独存一份，而是扫描全部主题库得到，因此永远不会与主题库不一致。
+//   - JSONL：可 grep、可 diff、可手改、可备份，几千条以内性能足够。
+
+import fs from 'node:fs'
+import path from 'node:path'
+
+import { rankDocs, jaccard, tokenSet, tokenize, entryTokenSet, tokenSetWithCompounds } from './rank.js'
+
+/** 把主题显示名转成目录用的 slug。中文保留，只清理空白与标点。 */
+export function slugify(name) {
+  const s = String(name ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/[^\p{Letter}\p{Number}-]+/gu, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-|-$/g, '')
+  return s || 'topic'
+}
+
+/** 标题归一化，用于判重：忽略大小写、空白与常见标点。 */
+export function normalizeTitle(title) {
+  return String(title ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}]+/gu, '')
+}
+
+/** 从字符串来源猜类型，用于兼容 v1 的裸字符串 source。 */
+function guessSourceType(ref) {
+  if (/^https?:\/\//i.test(ref)) return 'web'
+  if (/用户|口述|对话|亲述/i.test(ref)) return 'user'
+  if (/[\\/]|\.(pdf|png|jpe?g|txt|sql|md|cnf)$/i.test(ref)) return 'file'
+  return 'unknown'
+}
+
+/** 来源统一成 {type, ref, locator}。 */
+export function normalizeSource(source) {
+  if (source == null) return null
+  if (typeof source === 'string') {
+    const ref = source.trim()
+    if (!ref) return null
+    return { type: guessSourceType(ref), ref, locator: null }
+  }
+  if (typeof source !== 'object') return null
+  const ref = source.ref == null ? null : String(source.ref)
+  if (!ref) return null
+  return {
+    type: String(source.type || 'unknown'),
+    ref,
+    locator: source.locator == null ? null : String(source.locator),
+  }
+}
+
+export function createStore(root) {
+  const topicsDir = path.join(root, 'topics')
+  const bindingsFile = path.join(root, 'bindings.json')
+  const settingsFile = path.join(root, 'settings.json')
+  const cache = new Map()
+  /** 最近预览过的写入内容（hash → 时间），用于强制「先预览再写入」 */
+  const previews = new Map()
+  const PREVIEW_TTL_MS = 10 * 60 * 1000
+
+  const now = () => new Date().toISOString()
+
+  function ensureRoot() {
+    fs.mkdirSync(topicsDir, { recursive: true })
+  }
+
+  const topicDir = (slug) => path.join(topicsDir, slug)
+  const topicFile = (slug) => path.join(topicDir(slug), 'kb.jsonl')
+  const metaFile = (slug) => path.join(topicDir(slug), 'topic.json')
+
+  function statFile(file) {
+    try {
+      return fs.statSync(file)
+    } catch {
+      return null
+    }
+  }
+
+  function readMeta(slug) {
+    try {
+      return JSON.parse(fs.readFileSync(metaFile(slug), 'utf8'))
+    } catch {
+      return {}
+    }
+  }
+
+  function writeMeta(slug, meta) {
+    fs.mkdirSync(topicDir(slug), { recursive: true })
+    fs.writeFileSync(metaFile(slug), JSON.stringify(meta, null, 2), 'utf8')
+  }
+
+  function parseEntries(file) {
+    const out = []
+    let broken = 0
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      const text = line.trim()
+      if (!text) continue
+      try {
+        const entry = JSON.parse(text)
+        if (entry && typeof entry === 'object') out.push(entry)
+      } catch {
+        broken++
+      }
+    }
+    out.broken = broken
+    return out
+  }
+
+  /** 读取主题条目；按 mtime+size 缓存，坏行跳过并计数。 */
+  function readEntries(slug) {
+    const file = topicFile(slug)
+    const stat = statFile(file)
+    if (!stat) {
+      const empty = []
+      empty.broken = 0
+      return empty
+    }
+    const hit = cache.get(file)
+    if (hit && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.entries
+    const entries = parseEntries(file)
+    cache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, entries })
+    return entries
+  }
+
+  function writeEntries(slug, entries) {
+    fs.mkdirSync(topicDir(slug), { recursive: true })
+    const body = entries.map(entry => JSON.stringify(entry)).join('\n')
+    fs.writeFileSync(topicFile(slug), body ? body + '\n' : '', 'utf8')
+    cache.delete(topicFile(slug))
+  }
+
+  /** 并发保护：读到的内容若已被别的会话改过，拒绝覆盖。 */
+  function assertUnchanged(slug, observed) {
+    const stat = statFile(topicFile(slug))
+    if (!observed && !stat) return
+    if (!observed || !stat) {
+      throw new Error(`主题「${slug}」在你读取之后被其他会话改过，请重新读取后再写入`)
+    }
+    if (stat.mtimeMs !== observed.mtimeMs || stat.size !== observed.size) {
+      throw new Error(`主题「${slug}」在你读取之后被其他会话改过，请重新读取后再写入`)
+    }
+  }
+
+  function listTopics() {
+    ensureRoot()
+    const out = []
+    for (const item of fs.readdirSync(topicsDir, { withFileTypes: true })) {
+      if (!item.isDirectory()) continue
+      const slug = item.name
+      const meta = readMeta(slug)
+      const entries = readEntries(slug)
+      out.push({
+        slug,
+        name: meta.name || slug,
+        description: meta.description || '',
+        keywords: Array.isArray(meta.keywords) ? meta.keywords : [],
+        aliases: Array.isArray(meta.aliases) ? meta.aliases : [],
+        count: entries.length,
+        activeCount: entries.filter(entry => (entry.status || 'active') === 'active').length,
+        createdAt: meta.createdAt || null,
+        updatedAt: meta.updatedAt || null,
+      })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+  }
+
+  /** 主题模糊查找：按 slug / 名称 / 别名 / 关键词 / 描述匹配。 */
+  function findTopic(query) {
+    const needle = String(query ?? '').trim().toLowerCase()
+    if (!needle) return null
+    const wanted = slugify(needle)
+    const topics = listTopics()
+    const exact = topics.find(t => t.slug === wanted || slugify(t.name) === wanted)
+    if (exact) return exact
+    const scored = topics
+      .map(topic => {
+        const haystacks = [topic.name, topic.slug, topic.description, ...(topic.keywords || []), ...(topic.aliases || [])]
+        let score = 0
+        for (const hay of haystacks) {
+          const value = String(hay || '').toLowerCase()
+          if (!value) continue
+          if (value === needle) score += 10
+          else if (value.includes(needle)) score += 5
+          else if (needle.includes(value) && value.length >= 2) score += 3
+          else score += jaccard(tokenSet(needle), tokenSet(value))
+        }
+        return { topic, score }
+      })
+      .filter(item => item.score >= 2)
+      .sort((a, b) => b.score - a.score)
+    return scored.length ? scored[0].topic : null
+  }
+
+  /** 新建/更新主题元数据；同名则补别名，不丢已有条目。 */
+  function createTopic(name, meta = {}) {
+    const display = String(name ?? '').trim()
+    if (!display) throw new Error('主题名称不能为空')
+    ensureRoot()
+    const slug = slugify(display)
+    const existing = readMeta(slug)
+    const description = meta.description ? String(meta.description).trim() : existing.description || ''
+    const keywords = Array.isArray(meta.keywords)
+      ? meta.keywords.map(k => String(k).trim()).filter(Boolean).slice(0, 12)
+      : existing.keywords || []
+
+    if (existing.name) {
+      if (existing.name !== display) {
+        existing.aliases = Array.from(new Set([...(existing.aliases || []), existing.name]))
+        existing.name = display
+      }
+      if (description) existing.description = description
+      if (keywords.length) existing.keywords = keywords
+      existing.updatedAt = now()
+      writeMeta(slug, existing)
+    } else {
+      writeMeta(slug, {
+        name: display,
+        slug,
+        description,
+        keywords,
+        aliases: [],
+        createdAt: now(),
+        updatedAt: now(),
+      })
+      if (!fs.existsSync(topicFile(slug))) writeEntries(slug, [])
+    }
+    return slug
+  }
+
+  function readBindings() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(bindingsFile, 'utf8'))
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  function writeBindings(bindings) {
+    ensureRoot()
+    fs.writeFileSync(bindingsFile, JSON.stringify(bindings, null, 2), 'utf8')
+  }
+
+  function bindTopic(sessionId, slug) {
+    if (!sessionId) throw new Error('缺少会话标识，无法绑定主题')
+    const bindings = readBindings()
+    bindings[sessionId] = { topic: slug, updatedAt: now() }
+    writeBindings(bindings)
+    return slug
+  }
+
+  function currentTopic(sessionId) {
+    if (sessionId) {
+      const binding = readBindings()[sessionId]
+      if (binding && binding.topic) return binding.topic
+    }
+    // 没绑定的会话落到默认主题，避免每次都问「放哪个主题」
+    return readSettings().defaultTopic || null
+  }
+
+  function readSettings() {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(settingsFile, 'utf8'))
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  function writeSettings(settings) {
+    ensureRoot()
+    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf8')
+  }
+
+  /** 设置/清除默认主题（新会话未绑定时用它） */
+  function setDefaultTopic(name) {
+    const settings = readSettings()
+    if (name === null || name === undefined || String(name).trim() === '') {
+      delete settings.defaultTopic
+      writeSettings(settings)
+      return null
+    }
+    const slug = createTopic(String(name).trim())
+    settings.defaultTopic = slug
+    writeSettings(settings)
+    return slug
+  }
+
+  function getDefaultTopic() {
+    return readSettings().defaultTopic || null
+  }
+
+  /** 预览内容的指纹：内容改过就要重新预览 */
+  function previewKey(slug, cards) {
+    const normalized = (cards || [])
+      .map(card => ({
+        title: String(card?.title ?? '').trim(),
+        body: String(card?.body ?? '').trim(),
+        kind: card?.kind === 'qa' ? 'qa' : 'point',
+        q: card?.q ? String(card.q).trim() : null,
+        tags: Array.isArray(card?.tags) ? card.tags.map(t => String(t).trim()).filter(Boolean) : [],
+        appliesTo: card?.appliesTo ? String(card.appliesTo).trim() : null,
+        source: normalizeSource(card?.source),
+      }))
+      .sort((a, b) => a.title.localeCompare(b.title))
+    return slug + '|' + JSON.stringify(normalized)
+  }
+
+  function markPreviewed(slug, cards) {
+    const key = previewKey(slug, cards)
+    const nowMs = Date.now()
+    for (const [existing, at] of previews) {
+      if (nowMs - at > PREVIEW_TTL_MS) previews.delete(existing)
+    }
+    previews.set(key, nowMs)
+    return key
+  }
+
+  function hasPreviewed(slug, cards) {
+    const key = previewKey(slug, cards)
+    const at = previews.get(key)
+    if (at === undefined) return false
+    if (Date.now() - at > PREVIEW_TTL_MS) {
+      previews.delete(key)
+      return false
+    }
+    return true
+  }
+
+  /** 跨主题找相似条目：标题相似但正文差异大 → 可能是冲突（版本差异等）。 */
+  function findRelated(slug, cards) {
+    const others = []
+    for (const topic of listTopics()) {
+      if (topic.slug === slug) continue
+      for (const entry of readEntries(topic.slug)) {
+        if ((entry.status || 'active') !== 'active') continue
+        others.push({ ...entry, topicSlug: topic.slug })
+      }
+    }
+    if (!others.length) return []
+
+    const related = []
+    for (const card of cards) {
+      const title = String(card?.title ?? '').trim()
+      if (!title) continue
+      const query = `${title} ${String(card?.body ?? '').slice(0, 120)}`
+      const hits = rankDocs(others, query, 3)
+      for (const hit of hits) {
+        if (hit.score < 2) continue
+        const titleSim = jaccard(tokenSet(title), tokenSet(hit.title))
+        const bodySim = jaccard(tokenSet(card?.body ?? ''), tokenSet(hit.body ?? ''))
+        const conflict = titleSim >= 0.6 && bodySim < 0.5
+        related.push({
+          topic: hit.topic,
+          id: hit.id,
+          title: hit.title,
+          score: hit.score,
+          titleSim: Math.round(titleSim * 100) / 100,
+          bodySim: Math.round(bodySim * 100) / 100,
+          conflict,
+          note: conflict
+            ? '标题几乎相同但正文差异较大，可能是不同版本/场景的结论，请让用户裁决'
+            : '其它主题已有相近条目',
+        })
+      }
+    }
+    // 同一卡片只保留最像的 3 条
+    return related.slice(0, 3 * Math.max(1, cards.length))
+  }
+
+  /**
+   * 生成写入计划；dryRun=true 时只算不写。
+   * 同主题内标题归一化后相同即视为同一条：更新原条目并升版本，不追加重复行。
+   */
+  /**
+   * 同主题内的近似重复检测：标题不同、但讲的是同一件事。
+   *
+   * 判定：标题词在候选条目里的覆盖率 ≥ 0.45 且 BM25 分数过线 → 判「疑似重复」。
+   * 同标题的走「更新升版本」，不算重复。
+   */
+  function findSimilarInTopic(slug, cards) {
+    const entries = readEntries(slug).filter(entry => (entry.status || 'active') === 'active')
+    if (!entries.length) return []
+    const byId = new Map(entries.map(entry => [entry.id, entry]))
+    const N = entries.length
+
+    // 语料词频 → idf：通用词（间隙锁/页）在多条里都出现，权重低；
+    // 专有词（innodb_page_size/16KB）只在一两条里出现，权重大。
+    const df = new Map()
+    for (const entry of entries) {
+      for (const term of entryTokenSet(entry)) df.set(term, (df.get(term) || 0) + 1)
+    }
+    // 把查询本身算作一篇伪文档，未出现的词按 df=0.5 平滑。
+    // 不做平滑的话，小语料（N=1）里「库外词」的权重是「库内词」的 4.8 倍，会把真重复判没。
+    const N1 = N + 1
+    const idf = term => {
+      const d = df.get(term) ?? 0.5
+      return Math.log(1 + (N1 - d + 0.5) / (d + 0.5))
+    }
+    /** 查询词被条目覆盖的 idf 加权比例：分母是查询自身的总权重。 */
+    const weightedCoverage = (queryTerms, entryTokens) => {
+      let total = 0
+      let shared = 0
+      for (const term of queryTerms) {
+        const w = idf(term)
+        total += w
+        if (entryTokens.has(term)) shared += w
+      }
+      return total ? shared / total : 0
+    }
+
+    const out = []
+    for (const card of cards) {
+      const title = String(card?.title ?? '').trim()
+      if (!title) continue
+      const norm = normalizeTitle(title)
+      const titleTerms = Array.from(tokenSetWithCompounds(title))
+      if (!titleTerms.length) continue
+      const body = String(card?.body ?? '')
+      const bodyTerms = Array.from(tokenSetWithCompounds(body))
+      const hits = rankDocs(entries, `${title} ${body.slice(0, 160)}`, 5)
+      for (const hit of hits) {
+        if (hit.score < 2.5) continue
+        const entry = byId.get(hit.id)
+        if (!entry) continue
+        if (normalizeTitle(entry.title) === norm) continue
+        const entryTokens = entryTokenSet(entry)
+        // 标题与正文两路都要够像，才算「疑似重复」；只有一路像 = 相关但不同的事
+        const titleScore = weightedCoverage(titleTerms, entryTokens)
+        const bodyScore = weightedCoverage(bodyTerms, entryTokens)
+        if (titleScore < 0.45 || bodyScore < 0.5) continue
+        out.push({
+          id: entry.id,
+          title: entry.title,
+          topic: slug,
+          score: hit.score,
+          titleScore: Math.round(titleScore * 100) / 100,
+          bodyScore: Math.round(bodyScore * 100) / 100,
+          source: entry.source || null,
+          note: '同一主题里已有一条讲相近内容的卡片，但标题不同，没走更新升版本',
+        })
+        break
+      }
+    }
+    return out
+  }
+
+  /**
+   * 同主题里最相关的几条（给人和模型做参照；抓不到转述型重复，但能提供上下文）。
+   */
+  function findNearbyInTopic(slug, cards) {
+    const entries = readEntries(slug).filter(entry => (entry.status || 'active') === 'active')
+    if (!entries.length) return []
+    const out = []
+    const seen = new Set()
+    for (const card of cards) {
+      const title = String(card?.title ?? '').trim()
+      if (!title) continue
+      const norm = normalizeTitle(title)
+      const body = String(card?.body ?? '')
+      const hits = rankDocs(entries, `${title} ${body.slice(0, 160)}`, 3)
+      for (const hit of hits) {
+        if (normalizeTitle(hit.title) === norm) continue
+        if (seen.has(hit.id)) continue
+        seen.add(hit.id)
+        out.push({
+          id: hit.id,
+          title: hit.title,
+          topic: slug,
+          score: hit.score,
+          source: hit.source || null,
+        })
+      }
+    }
+    return out.slice(0, 5)
+  }
+
+  function planSave({ topic, cards, sessionId, dryRun }) {
+    if (!Array.isArray(cards) || cards.length === 0) throw new Error('cards 不能为空')
+    // dryRun 不创建主题，保持「只预览、不动盘」的语义
+    let slug
+    if (topic) {
+      slug = dryRun ? (findTopic(topic)?.slug ?? slugify(topic)) : createTopic(topic)
+    } else {
+      slug = currentTopic(sessionId)
+    }
+    if (!slug) {
+      throw new Error('当前会话没有绑定主题：先调用 learn_topics(action="create"|"use") 指定主题')
+    }
+
+    // 先记下文件状态，再读内容：这样才能判断「读之后有没有被别人改过」
+    const observed = statFile(topicFile(slug))
+    const entries = readEntries(slug)
+    const plan = []
+
+    for (const card of cards) {
+      const title = String(card?.title ?? '').trim()
+      if (!title) throw new Error('每张卡片都必须有 title')
+      const body = String(card?.body ?? '').trim()
+      const kind = card?.kind === 'qa' ? 'qa' : 'point'
+      const norm = normalizeTitle(title)
+      const existing = entries.find(
+        entry => entry.normTitle === norm && (entry.kind || 'point') === kind,
+      )
+      const archived = existing && (existing.status || 'active') === 'archived'
+      plan.push({
+        title,
+        kind,
+        action: existing ? (archived ? 'restore' : 'update') : 'create',
+        id: existing ? existing.id : null,
+        version: existing ? (existing.version || 1) + 1 : 1,
+        body,
+        tags: Array.isArray(card?.tags)
+          ? card.tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8)
+          : existing?.tags || [],
+        q: card?.q ? String(card.q).trim() : existing?.q,
+        source: normalizeSource(card?.source) ?? existing?.source ?? null,
+        verified:
+          typeof card?.verified === 'boolean'
+            ? card.verified
+            : existing?.verified ?? (card?.source?.type === 'user'),
+        appliesTo: card?.appliesTo ? String(card.appliesTo).trim() : existing?.appliesTo ?? null,
+      })
+    }
+
+    const related = findRelated(slug, cards)
+    const similar = findSimilarInTopic(slug, cards)
+    const nearby = findNearbyInTopic(slug, cards)
+
+    if (!dryRun) {
+      assertUnchanged(slug, observed)
+      for (const item of plan) {
+        const existing = item.id
+          ? entries.find(entry => entry.id === item.id)
+          : null
+        if (existing) {
+          existing.version = item.version
+          existing.title = item.title
+          existing.body = item.body
+          existing.q = item.q
+          existing.tags = item.tags
+          existing.source = item.source
+          existing.verified = item.verified
+          existing.appliesTo = item.appliesTo
+          existing.status = 'active'
+          delete existing.archivedAt
+          existing.updatedAt = now()
+        } else {
+          entries.push({
+            id: 'k_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
+            topic: slug,
+            kind: item.kind,
+            title: item.title,
+            normTitle: normalizeTitle(item.title),
+            q: item.q,
+            body: item.body,
+            tags: item.tags,
+            source: item.source,
+            verified: item.verified,
+            appliesTo: item.appliesTo,
+            status: 'active',
+            createdAt: now(),
+            updatedAt: now(),
+            version: 1,
+          })
+        }
+      }
+      writeEntries(slug, entries)
+      const meta = readMeta(slug)
+      meta.updatedAt = now()
+      if (!meta.name) meta.name = slug
+      if (!meta.createdAt) meta.createdAt = meta.updatedAt
+      writeMeta(slug, meta)
+    }
+
+    return {
+      topic: slug,
+      dryRun: !!dryRun,
+      plan: plan.map(item => ({
+        title: item.title,
+        kind: item.kind,
+        action: item.action,
+        id: item.id,
+        version: item.version,
+        verified: item.verified,
+        appliesTo: item.appliesTo,
+      })),
+      related,
+      similar,
+      nearby,
+      total: entries.length,
+    }
+  }
+
+  /** 更新既有条目（按 id）。 */
+  function updateEntry({ id, topic, sessionId, fields }) {
+    const slug = topic ? slugify(topic) : currentTopic(sessionId)
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (!entry) continue
+      assertUnchanged(candidate, observed)
+      if (fields.title !== undefined) {
+        entry.title = String(fields.title).trim()
+        entry.normTitle = normalizeTitle(entry.title)
+      }
+      if (fields.body !== undefined) entry.body = String(fields.body).trim()
+      if (fields.q !== undefined) entry.q = String(fields.q).trim()
+      if (fields.tags !== undefined) {
+        entry.tags = (Array.isArray(fields.tags) ? fields.tags : [])
+          .map(tag => String(tag).trim())
+          .filter(Boolean)
+          .slice(0, 8)
+      }
+      if (fields.source !== undefined) entry.source = normalizeSource(fields.source)
+      if (fields.appliesTo !== undefined) {
+        entry.appliesTo = fields.appliesTo === null ? null : String(fields.appliesTo).trim()
+      }
+      if (fields.verified !== undefined) entry.verified = !!fields.verified
+      if (fields.kind !== undefined) entry.kind = fields.kind === 'qa' ? 'qa' : 'point'
+      entry.version = (entry.version || 1) + 1
+      entry.updatedAt = now()
+      writeEntries(candidate, entries)
+      return { ok: true, topic: candidate, id: entry.id, version: entry.version, title: entry.title }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /** 删除/归档条目。默认归档（可恢复），hard=true 才真删。 */
+  function deleteEntry({ id, topic, sessionId, hard }) {
+    const slug = topic ? slugify(topic) : currentTopic(sessionId)
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const index = entries.findIndex(item => item.id === id)
+      if (index < 0) continue
+      assertUnchanged(candidate, observed)
+      const [entry] = entries.splice(index, 1)
+      if (!hard) {
+        entry.status = 'archived'
+        entry.archivedAt = now()
+        entry.updatedAt = now()
+        entries.push(entry)
+      }
+      writeEntries(candidate, entries)
+      return { ok: true, topic: candidate, id, mode: hard ? 'deleted' : 'archived', title: entry.title }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /** 恢复归档条目：status 回 active，清 archivedAt（Web UI 的「恢复」用它）。 */
+  function restoreEntry({ id, topic }) {
+    const slug = topic ? slugify(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (!entry) continue
+      if ((entry.status || 'active') === 'active') {
+        return { ok: true, topic: candidate, id, mode: 'already-active', title: entry.title }
+      }
+      assertUnchanged(candidate, observed)
+      entry.status = 'active'
+      delete entry.archivedAt
+      entry.updatedAt = now()
+      entry.version = (entry.version || 1) + 1
+      writeEntries(candidate, entries)
+      return { ok: true, topic: candidate, id, mode: 'restored', title: entry.title }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /** 列出条目，支持按状态/类型/标签过滤。 */
+  function listEntries({ topic, sessionId, limit, status, kind, tag }) {
+    const slug = topic ? slugify(topic) : currentTopic(sessionId)
+    if (!slug) {
+      throw new Error('当前会话没有绑定主题：先调用 learn_topics(action="create"|"use") 指定主题')
+    }
+    const entries = readEntries(slug)
+    const wanted = status || 'active'
+    const filtered = entries.filter(entry => {
+      const entryStatus = entry.status || 'active'
+      if (wanted !== 'all' && entryStatus !== wanted) return false
+      if (kind && (entry.kind || 'point') !== kind) return false
+      if (tag && !(entry.tags || []).includes(tag)) return false
+      return true
+    })
+    const max = Number.isInteger(limit) && limit > 0 ? limit : filtered.length
+    return {
+      topic: slug,
+      total: filtered.length,
+      brokenLines: entries.broken || 0,
+      entries: filtered.slice(0, max).map(entry => ({
+        id: entry.id,
+        kind: entry.kind || 'point',
+        status: entry.status || 'active',
+        title: entry.title,
+        tags: entry.tags || [],
+        q: entry.q || null,
+        source: entry.source || null,
+        verified: entry.verified ?? false,
+        appliesTo: entry.appliesTo || null,
+        version: entry.version || 1,
+        updatedAt: entry.updatedAt || null,
+      })),
+    }
+  }
+
+  return {
+    root,
+    listTopics,
+    findTopic,
+    createTopic,
+    readEntries,
+    currentTopic,
+    bindTopic,
+    setDefaultTopic,
+    getDefaultTopic,
+    markPreviewed,
+    hasPreviewed,
+    planSave,
+    updateEntry,
+    deleteEntry,
+    restoreEntry,
+    listEntries,
+  }
+}
