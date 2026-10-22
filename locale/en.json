@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Study Mode",
+    "description": "Topic knowledge bases with 4-tier retrieval. Pick the \"Study Mode\" preset when starting a session: answers look up the topic library first, then the other topic libraries, then the model's own knowledge (marked unverified), and only reach the web for facts that must be checked (marked with the date). The book icon in the sidebar opens the knowledge-base panel: browse by topic, search, archive, restore, delete, add."
+  }
+}

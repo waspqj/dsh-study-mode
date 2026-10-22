@@ -1,6 +1,6 @@
 {
   "name": "dsh-study-mode",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Learning-mode agent preset for DeepSeek Harness: topic knowledge bases with 4-tier retrieval, plus an embedded knowledge-base panel in the sidebar.",
   "keywords": [
     "deepseek-harness",
@@ -13,6 +13,7 @@
     "plugin"
   ],
   "license": "MIT",
+  "icon": "icon.svg",
   "author": "waspqj <3555956402@qq.com>",
   "homepage": "https://gitee.com/waspqj/dsh-study-mode#readme",
   "bugs": {
@@ -35,6 +36,7 @@
     "client/",
     "test/",
     "scripts/",
+    "locale/",
     "cordis.patch.yml",
     "icon.svg",
     "README.md",
