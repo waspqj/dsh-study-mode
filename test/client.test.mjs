@@ -446,7 +446,7 @@ await check('拉取总览与条目列表', async () => {
   assert.ok(urls.some((url) => url.includes('/kb/api/overview')), '没有请求 overview')
   assert.ok(urls.some((url) => url.includes('/kb/api/entries')), '没有请求 entries')
   assert.match(html, /学习知识库/)
-  assert.match(html, /1 条活跃 · 2 条合计 · 1 个主题/)
+  assert.match(html, /1 条 · 1 个主题/)
   assert.match(html, /MySQL 进阶/)
   assert.match(html, /全部主题/)
   assert.match(html, /UI \d+\.\d+\.\d+/, '标题栏应渲染 UI 版本标记')

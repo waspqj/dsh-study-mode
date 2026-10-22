@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.14'
+    const UI_REV = '0.3.15'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -164,55 +164,71 @@ window.__ModuleLoader__.load({
 
     // ---------------------------------------------------------------- 样式
     const CSS = `
-.kb-root{--kb-surface:var(--kb-panel-bg,var(--dsw-alias-bg-base));display:flex;flex-direction:column;height:100%;min-height:0;background:var(--kb-surface);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.55}
-.kb-head{display:flex;align-items:center;gap:8px;padding:12px 16px 8px;flex:none}
-.kb-head h2{margin:0;font-size:15px;font-weight:600}
+.kb-root{--kb-surface:var(--kb-panel-bg,var(--dsw-alias-bg-base));--kb-line:color-mix(in srgb,var(--dsw-alias-label-primary) 18%,transparent);--kb-card:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--kb-surface));--kb-card-hover:color-mix(in srgb,var(--dsw-alias-label-primary) 15%,var(--kb-surface));--kb-rail:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,var(--kb-surface));--kb-field:color-mix(in srgb,var(--dsw-alias-label-primary) 8%,var(--kb-surface));--kb-accent:#3b82f6;--kb-accent-soft:rgb(59 130 246 / .15);--kb-tag-fg:color-mix(in srgb,var(--kb-accent) 60%,var(--dsw-alias-label-primary));display:flex;flex-direction:column;height:100%;min-height:0;background:var(--kb-surface);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.55}
+.kb-head{display:flex;align-items:center;gap:8px;padding:14px 18px 10px;flex:none}
+.kb-head h2{margin:0;font-size:15.5px;font-weight:600}
 .kb-path{color:var(--dsw-alias-label-secondary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60ch}
 .kb-grow{flex:1 1 auto;min-width:0}
 .kb-btn{font:inherit;font-size:12px;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:3px 9px;cursor:pointer;white-space:nowrap}
 .kb-btn:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}
-.kb-btn.primary{color:var(--dsw-alias-label-primary-foreground);background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);font-weight:500}
+.kb-btn.primary{color:#fff;background:var(--kb-accent);border-color:var(--kb-accent);font-weight:500}
 .kb-btn.primary:hover{opacity:.9}
 .kb-btn.danger{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
 .kb-btn.danger:hover{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-bg-base)}
 .kb-btn:disabled{opacity:.45;cursor:default}
-.kb-search{display:flex;align-items:center;gap:8px;padding:0 16px 10px;flex:none;flex-wrap:wrap}
-.kb-input,.kb-select,.kb-textarea{font:inherit;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:6px;padding:5px 9px;outline:none}
-.kb-input:focus,.kb-select:focus,.kb-textarea:focus{border-color:var(--dsw-alias-brand-primary)}
-.kb-search .kb-input{flex:1 1 220px;min-width:140px}
-.kb-textarea{resize:vertical;min-height:84px;font-family:inherit}
-.kb-body{display:flex;flex:1 1 auto;min-height:0;border-top:1px solid var(--dsw-alias-border-l1)}
-.kb-rail{flex:0 0 168px;overflow:auto;padding:8px 6px;background:var(--kb-rail-bg,var(--dsw-alias-bg-layer-1));border-right:1px solid var(--dsw-alias-border-l1)}
-.kb-topic{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;cursor:pointer;color:var(--dsw-alias-label-secondary);overflow:hidden}
-.kb-topic:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.kb-topic.on{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}
+.kb-search{display:flex;align-items:center;gap:10px;padding:0 18px 12px;flex:none;flex-wrap:wrap}
+.kb-input,.kb-select,.kb-textarea{font:inherit;font-size:12.5px;height:34px;color:var(--dsw-alias-label-primary);background:var(--kb-field);border:1px solid var(--kb-line);border-radius:8px;padding:0 12px;outline:none;transition:border-color .12s ease,box-shadow .12s ease}
+.kb-input:focus,.kb-select:focus,.kb-textarea:focus{border-color:var(--kb-accent);box-shadow:0 0 0 3px var(--kb-accent-soft)}
+.kb-search .kb-input{flex:1 1 260px;min-width:160px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239098a2' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='M15.4 15.4 20 20'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:11px center;padding-left:34px}
+.kb-input::placeholder{color:color-mix(in srgb,var(--dsw-alias-label-secondary) 82%,transparent)}
+.kb-textarea{resize:vertical;height:auto;min-height:84px;padding:7px 10px;font-family:inherit}
+.kb-body{display:flex;flex:1 1 auto;min-height:0;border-top:1px solid var(--kb-line)}
+.kb-rail{flex:0 0 188px;overflow:auto;padding:10px 8px;background:var(--kb-rail);border-right:1px solid var(--kb-line)}
+.kb-topic{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;font-size:12.5px;cursor:pointer;color:var(--dsw-alias-label-secondary);overflow:hidden;transition:background .12s ease,color .12s ease}
+.kb-topic:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent);color:var(--dsw-alias-label-primary)}
+.kb-topic.on{background:color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 16%,transparent);color:var(--dsw-alias-label-primary);font-weight:600;box-shadow:inset 3px 0 0 var(--kb-tc,var(--kb-accent))}
 .kb-topic .kb-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kb-topic .kb-n{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
-.kb-list{flex:1 1 auto;min-width:0;overflow:auto;padding:10px 16px 28px}
-.kb-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;align-items:stretch}
+.kb-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--kb-tc,var(--kb-accent));box-shadow:0 0 0 3px color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 18%,transparent)}
+.kb-rail-cap{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary);opacity:.9;padding:2px 10px 6px}
+.kb-rail-foot{margin-top:8px;padding:6px 10px 2px;border-top:1px solid var(--kb-line);font-size:10.5px;color:var(--dsw-alias-label-secondary);opacity:.8}
+.kb-list{flex:1 1 auto;min-width:0;overflow:auto;padding:14px 18px 32px}
+.kb-list::-webkit-scrollbar,.kb-rail::-webkit-scrollbar,.kb-modal-body::-webkit-scrollbar{width:8px;height:8px}
+.kb-list::-webkit-scrollbar-track,.kb-rail::-webkit-scrollbar-track,.kb-modal-body::-webkit-scrollbar-track{background:transparent}
+.kb-list::-webkit-scrollbar-thumb,.kb-rail::-webkit-scrollbar-thumb,.kb-modal-body::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-primary) 16%,transparent);border-radius:999px}
+.kb-list::-webkit-scrollbar-thumb:hover,.kb-rail::-webkit-scrollbar-thumb:hover,.kb-modal-body::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 28%,transparent)}
+.kb-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:stretch}
 @media (max-width:820px){.kb-grid{grid-template-columns:minmax(0,1fr)}}
 .kb-note{color:var(--dsw-alias-label-secondary);font-size:12px;margin-bottom:6px}
+.kb-empty{display:flex;flex-direction:column;align-items:center;gap:6px;padding:36px 16px;color:var(--dsw-alias-label-secondary);text-align:center}
+.kb-empty-ico{width:30px;height:30px;opacity:.55;margin-bottom:2px}
+.kb-empty-title{font-size:13px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.kb-empty-hint{font-size:11.5px;line-height:1.6;opacity:.85}
+.kb-empty .kb-btn{margin-top:4px}
 .kb-err{color:var(--dsw-alias-state-error-primary);font-size:12px;padding:6px 16px}
 .kb-ok{color:var(--dsw-alias-state-success-primary);font-size:12px;padding:6px 16px}
-.kb-card{position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px 9px 6px;background:var(--kb-rail-bg,var(--dsw-alias-bg-layer-1));cursor:pointer;transition:border-color .12s ease,background .12s ease}
-.kb-card:hover{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}
+.kb-card{position:relative;border:1px solid var(--kb-line);border-radius:9px;padding:10px 12px 9px;background:var(--kb-card);cursor:pointer;transition:border-color .12s ease,background .12s ease}
+.kb-card:hover{border-color:color-mix(in srgb,var(--dsw-alias-label-primary) 22%,transparent);background:var(--kb-card-hover)}
 .kb-card.archived{opacity:.72}
+.kb-card::before{content:'';position:absolute;left:0;top:12px;bottom:12px;width:2px;border-radius:0 2px 2px 0;background:var(--kb-tc,var(--kb-accent));opacity:.5}
+.kb-card{padding-left:15px}
 .kb-card-head{display:flex;align-items:center;gap:5px;min-width:0}
-.kb-card-title{flex:1 1 auto;min-width:0;font-weight:650;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kb-badge{flex:none;font-size:10px;line-height:1.6;padding:0 4px;border-radius:4px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
+.kb-card-title{flex:1 1 auto;min-width:0;font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kb-badge{flex:none;font-size:10px;line-height:1.6;padding:0 5px;border-radius:4px;border:1px solid var(--dsw-alias-border-l2);background:color-mix(in srgb,var(--dsw-alias-label-primary) 5%,transparent);color:var(--dsw-alias-label-secondary)}
 .kb-badge.warn{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
 .kb-badge.idle{color:var(--dsw-alias-state-idle-primary);border-color:var(--dsw-alias-state-idle-primary)}
+.kb-badge.quiet{color:var(--dsw-alias-label-secondary);border-color:var(--dsw-alias-border-l1);opacity:.9}
 .kb-meta{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
 .kb-q{color:var(--dsw-alias-label-secondary);font-size:11.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kb-text{margin-top:3px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.kb-tags{display:flex;gap:4px;margin-top:4px;overflow:hidden;max-height:18px}
-.kb-tag{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-radius:4px;padding:0 4px}
-.kb-card-foot{display:flex;align-items:center;gap:6px;margin-top:4px;padding-right:76px;font-size:10.5px;color:var(--dsw-alias-label-secondary)}
+.kb-text{margin-top:4px;font-size:12.5px;line-height:1.55;min-height:20px;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.kb-tags{display:flex;gap:5px;margin-top:6px;overflow:hidden;max-height:19px}
+.kb-tag{flex:none;font-size:10.5px;color:color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 55%,var(--dsw-alias-label-primary));background:color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 15%,transparent);border-radius:999px;padding:1px 7px}
+.kb-card-foot{display:flex;align-items:center;gap:6px;margin-top:6px;padding-right:76px;font-size:10px;color:var(--dsw-alias-label-secondary);opacity:.72}
 .kb-rev{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);opacity:.8;font-variant-numeric:tabular-nums;margin-right:2px}
 .kb-score{font-size:10.5px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
-.kb-card-acts{position:absolute;right:5px;bottom:4px;display:flex;gap:4px;padding:2px 3px;border-radius:6px;background:color-mix(in srgb, var(--dsw-alias-bg-layer-1) 90%, transparent);opacity:0;pointer-events:none;transition:opacity .12s ease}
+.kb-card-acts{position:absolute;right:6px;bottom:5px;display:flex;gap:4px;padding:2px 3px;border-radius:6px;background:color-mix(in srgb,var(--kb-card) 92%,transparent);opacity:0;pointer-events:none;transition:opacity .12s ease}
 .kb-card:hover .kb-card-acts,.kb-card:focus-within .kb-card-acts{opacity:1;pointer-events:auto}
-.kb-mini{font:inherit;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 6px;cursor:pointer;white-space:nowrap}
+.kb-mini{font:inherit;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--kb-line);border-radius:5px;padding:0 6px;cursor:pointer;white-space:nowrap}
 .kb-mini:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}
 .kb-mini.danger{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
 .kb-mini.danger:hover{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-bg-base)}
@@ -231,7 +247,7 @@ window.__ModuleLoader__.load({
 .kb-blocks>.kb-p:first-child{font-size:15.5px;font-weight:600;line-height:1.65;margin:0 0 15px;color:var(--dsw-alias-label-primary)}
 .kb-list{margin:0 0 9px;padding:0;list-style:none}
 .kb-li{display:flex;gap:8px;align-items:flex-start;margin:0 0 7px}
-.kb-li-marker{flex:none;min-width:16px;color:var(--dsw-alias-brand-primary);font-weight:700}
+.kb-li-marker{flex:none;min-width:16px;color:var(--kb-accent);font-weight:700}
 .kb-li-text{flex:1 1 auto;min-width:0;white-space:pre-wrap;line-height:1.8}
 .kb-quote{margin:0 0 10px;padding:7px 10px;border-left:3px solid var(--dsw-alias-brand-primary);border-radius:0 6px 6px 0;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
 .kb-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--kb-surface,var(--dsw-alias-bg-base)));border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 22%,var(--kb-surface,var(--dsw-alias-bg-base)));color:var(--dsw-alias-label-primary)}
@@ -417,6 +433,17 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     }
 
     // ---------------------------------------------------------------- 条目卡片
+    // 每个主题一个颜色：用于左栏圆点、选中态和卡片左侧色条；
+    // 不用 --dsw-alias-brand-primary——本机 open-sea 皮肤里它是近白色，混出来全是白。
+    const TOPIC_COLORS = ['#3b82f6', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#f43f5e']
+
+    function topicColor(slug) {
+      const s = String(slug || '')
+      let h = 0
+      for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
+      return TOPIC_COLORS[h % TOPIC_COLORS.length]
+    }
+
     function Badge(props) {
       return h('span', { className: 'kb-badge' + (props.tone ? ' ' + props.tone : '') }, props.children)
     }
@@ -667,7 +694,9 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const blocks = parseBody(props.body)
       if (blocks.length === 0) return null
       const first = blocks[0]
-      const runs = first.type === 'list' ? (first.items[0] ? first.items[0].runs : []) : first.runs
+      const picked = first.type === 'list' ? (first.items[0] ? first.items[0].runs : []) : first.runs
+      // 摘要不画高亮：整句被【】包住时，一行 12px 小字会挂满一条橙色下划线，看着像超链接
+      const runs = picked.map((run) => (run.hl ? { text: run.text } : run))
       const more = blocks.length > 1 || (first.type === 'list' && first.items.length > 1)
       return h(
         'span',
@@ -710,13 +739,14 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           role: 'button',
           tabIndex: 0,
           title: t('open'),
+          style: { '--kb-tc': topicColor(entry.topic) },
         },
         h(
           'div',
           { className: 'kb-card-head' },
           h('span', { className: 'kb-card-title' }, entry.title),
           entry.kind === 'qa' ? h(Badge, null, t('kindQa')) : null,
-          entry.verified ? null : h(Badge, { tone: 'warn' }, t('unverified')),
+          entry.verified ? null : h(Badge, { tone: 'quiet' }, t('unverified')),
           archived ? h(Badge, { tone: 'idle' }, t('archivedTag')) : null,
         ),
         entry.q ? h('div', { className: 'kb-q' }, 'Q ' + entry.q) : null,
@@ -1081,7 +1111,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           h(
             'span',
             { className: 'kb-path', title: (overview && overview.root) || '' },
-            `${totalActive} 条活跃 · ${totalAll} 条合计 · ${topics.length} 个主题`,
+            `${totalActive} 条 · ${topics.length} 个主题`,
           ),
           h('span', { className: 'kb-grow' }),
           h('span', { className: 'kb-rev', title: '当前加载的界面版本' }, 'UI ' + UI_REV),
@@ -1119,9 +1149,15 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           h(
             'aside',
             { className: 'kb-rail' },
+            h('div', { className: 'kb-rail-cap' }, '主题'),
             h(
               'div',
-              { className: 'kb-topic' + (topic ? '' : ' on'), onClick: () => setTopic('') },
+              {
+                className: 'kb-topic' + (topic ? '' : ' on'),
+                onClick: () => setTopic(''),
+                style: { '--kb-tc': 'var(--kb-accent)' },
+              },
+              h('span', { className: 'kb-dot' }),
               h('span', { className: 'kb-name' }, t('allTopics')),
               h('span', { className: 'kb-n' }, String(totalActive)),
             ),
@@ -1133,11 +1169,14 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                   className: 'kb-topic' + (topic === item.slug ? ' on' : ''),
                   onClick: () => setTopic(item.slug),
                   title: item.description || item.slug,
+                  style: { '--kb-tc': topicColor(item.slug) },
                 },
+                h('span', { className: 'kb-dot' }),
                 h('span', { className: 'kb-name' }, item.name),
                 h('span', { className: 'kb-n' }, String(status === 'active' ? item.activeCount : item.count)),
               ),
             ),
+            h('div', { className: 'kb-rail-foot' }, '共 ' + totalAll + ' 条'),
           ),
           h(
             'section',
@@ -1171,8 +1210,43 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                   : `${entries.length} 条`,
             ),
             !loading && !searching && topics.length === 0 && !adding ? h('div', { className: 'kb-note' }, t('noTopic')) : null,
+            loading && list.length === 0
+              ? h(
+                  'div',
+                  { className: 'kb-empty' },
+                  h('div', { className: 'kb-empty-title' }, t('loading')),
+                  h('div', { className: 'kb-empty-hint' }, '正在读取本地知识库'),
+                )
+              : null,
             !loading && list.length === 0 && (searching || topics.length > 0)
-              ? h('div', { className: 'kb-note' }, searching ? t('emptySearch') : topic ? t('emptyTopic') : t('emptyAll'))
+              ? h(
+                  'div',
+                  { className: 'kb-empty' },
+                  h(
+                    'svg',
+                    {
+                      className: 'kb-empty-ico',
+                      viewBox: '0 0 24 24',
+                      fill: 'none',
+                      stroke: 'currentColor',
+                      strokeWidth: 1.6,
+                      strokeLinecap: 'round',
+                    },
+                    h('circle', { cx: 10.5, cy: 10.5, r: 6.5 }),
+                    h('path', { d: 'M15.4 15.4 20 20' }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'kb-empty-title' },
+                    searching ? t('emptySearch') : topic ? t('emptyTopic') : t('emptyAll'),
+                  ),
+                  h(
+                    'div',
+                    { className: 'kb-empty-hint' },
+                    searching ? '换个关键词试试，或者清空搜索看全部' : '点右上「新增」录入第一条知识',
+                  ),
+                  searching ? h('button', { className: 'kb-btn', onClick: () => setQuery('') }, '清空搜索') : null,
+                )
               : null,
             h(
               'div',
