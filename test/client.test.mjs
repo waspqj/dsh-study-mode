@@ -853,6 +853,124 @@ await check('热重载后旧 <style> 会被刷新成新样式（不是"存在就
   assert.ok(stale.textContent.includes('rgba(0,0,0,.58)'), '回退后的遮罩色没进样式表')
 })
 
+console.log('正文解析（极简 Markdown 子集）')
+const parseBody = api.parseBody
+
+await check('纯文本 → 一个段落', () => {
+  const blocks = parseBody('连接层处理客户端连接：做权限校验、保存连接信息。')
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].type, 'p')
+})
+
+await check('行首 "- " → 列表块', () => {
+  const blocks = parseBody('- 第一点\n- 第二点')
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].type, 'list')
+  assert.equal(blocks[0].items.length, 2)
+  assert.equal(blocks[0].items[0].marker, '-')
+  assert.equal(blocks[0].items[0].runs[0].text, '第一点')
+})
+
+await check('行内 ①②③ 连写 → 拆成列表（存量卡片的典型形态）', () => {
+  const blocks = parseBody('①修饰局部变量：作用域不变。②修饰全局变量：内部链接。③修饰函数：隐藏实现。')
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].type, 'list')
+  assert.equal(blocks[0].items.length, 3)
+  assert.equal(blocks[0].items[0].marker, '①')
+  assert.ok(blocks[0].items[0].runs[0].text.includes('修饰局部变量'))
+  assert.ok(blocks[0].items[2].runs[0].text.includes('修饰函数'))
+})
+
+await check('数字枚举连号才拆，不连号当普通段落', () => {
+  const seq = parseBody('1. 先建表 2. 再插数据 3. 最后建索引')
+  assert.equal(seq[0].type, 'list')
+  assert.equal(seq[0].items.length, 3)
+  const notSeq = parseBody('见 1. 章节 5. 小节')
+  assert.equal(notSeq[0].type, 'p')
+})
+
+await check('**粗体** → 加粗 run', () => {
+  const blocks = parseBody('这里的 **ReadView** 很关键')
+  assert.ok(blocks[0].runs.some((run) => run.bold && run.text === 'ReadView'))
+})
+
+await check('`代码` → code run，代码里的星号不当粗体', () => {
+  const blocks = parseBody('执行 `git **push**` 即可')
+  const code = blocks[0].runs.find((run) => run.code)
+  assert.ok(code, '没认出代码段')
+  assert.equal(code.text, 'git **push**')
+  assert.ok(!blocks[0].runs.some((run) => run.bold))
+})
+
+await check('> 引用 → quote 块', () => {
+  const blocks = parseBody('> 这是提醒')
+  assert.equal(blocks[0].type, 'quote')
+  assert.equal(blocks[0].runs[0].text, '这是提醒')
+})
+
+await check('【高亮】 → 高亮 run', () => {
+  const blocks = parseBody('注意【必须加锁】否则会幻读')
+  assert.ok(blocks[0].runs.some((run) => run.hl && run.text === '必须加锁'))
+})
+
+await check('版本号 8.0 不会被当成枚举', () => {
+  const blocks = parseBody('MySQL 8.0 的架构分四层')
+  assert.equal(blocks[0].type, 'p')
+  assert.equal(blocks[0].runs[0].text, 'MySQL 8.0 的架构分四层')
+})
+
+await check('单个不在段首的 ① 不拆（避免误判）', () => {
+  const blocks = parseBody('参见①这条的说明')
+  assert.equal(blocks[0].type, 'p')
+})
+
+await check('空正文 → 空数组', () => {
+  assert.equal(parseBody('').length, 0)
+  assert.equal(parseBody(null).length, 0)
+})
+
+await check('空行分段', () => {
+  const blocks = parseBody('第一段\n\n第二段')
+  assert.equal(blocks.length, 2)
+  assert.equal(blocks[0].type, 'p')
+  assert.equal(blocks[1].type, 'p')
+})
+
+await check('行首术语自动加粗（不改数据）', () => {
+  const blocks = parseBody('大端存储：数据低位存到内存高地址。')
+  assert.ok(blocks[0].runs[0].bold, '术语没被加粗')
+  assert.equal(blocks[0].runs[0].text, '大端存储')
+})
+
+await check('长术语不加粗（避免整句变粗）', () => {
+  const blocks = parseBody('连接层处理客户端连接的完整职责：权限校验。')
+  assert.ok(!blocks[0].runs.some((run) => run.bold), '长短语不该被当成术语')
+})
+
+await check('已经用 ** 加粗的不重复处理', () => {
+  const blocks = parseBody('**优点**：A 比 B 快。')
+  assert.equal(blocks[0].runs[0].text, '优点')
+  assert.ok(blocks[0].runs[0].bold)
+})
+
+await check('列表项里的术语也加粗', () => {
+  const blocks = parseBody('- 优点：A 快\n- 缺点：B 慢。')
+  assert.equal(blocks[0].type, 'list')
+  const second = blocks[0].items[1]
+  assert.ok(second.runs[0].bold, '列表项里的术语没加粗')
+  assert.equal(second.runs[0].text, '缺点')
+})
+
+await check('卡片只显示第一块作摘要，其余用省略号收尾', async () => {
+  const original = fixtures.entries.entries[0].body
+  fixtures.entries.entries[0].body = '第一段结论。\n- 要点一\n- 要点二'
+  const { html } = await run(Panel, {})
+  assert.ok(html.includes('第一段结论'), '摘要里没有第一段')
+  assert.ok(!html.includes('要点一'), '卡片不该把列表全展开')
+  assert.ok(html.includes('…'), '后面还有内容却没收尾')
+  fixtures.entries.entries[0].body = original
+})
+
 console.log('')
 console.log(passed + ' assertions passed')
 if (process.exitCode) console.error('有失败用例')

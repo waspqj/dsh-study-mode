@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.12'
+    const UI_REV = '0.3.13'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -164,7 +164,7 @@ window.__ModuleLoader__.load({
 
     // ---------------------------------------------------------------- 样式
     const CSS = `
-.kb-root{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.55}
+.kb-root{--kb-surface:var(--kb-panel-bg,var(--dsw-alias-bg-base));display:flex;flex-direction:column;height:100%;min-height:0;background:var(--kb-surface);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.55}
 .kb-head{display:flex;align-items:center;gap:8px;padding:12px 16px 8px;flex:none}
 .kb-head h2{margin:0;font-size:15px;font-weight:600}
 .kb-path{color:var(--dsw-alias-label-secondary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60ch}
@@ -182,7 +182,7 @@ window.__ModuleLoader__.load({
 .kb-search .kb-input{flex:1 1 220px;min-width:140px}
 .kb-textarea{resize:vertical;min-height:84px;font-family:inherit}
 .kb-body{display:flex;flex:1 1 auto;min-height:0;border-top:1px solid var(--dsw-alias-border-l1)}
-.kb-rail{flex:0 0 168px;overflow:auto;padding:8px 6px;background:var(--dsw-alias-bg-layer-1);border-right:1px solid var(--dsw-alias-border-l1)}
+.kb-rail{flex:0 0 168px;overflow:auto;padding:8px 6px;background:var(--kb-rail-bg,var(--dsw-alias-bg-layer-1));border-right:1px solid var(--dsw-alias-border-l1)}
 .kb-topic{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;cursor:pointer;color:var(--dsw-alias-label-secondary);overflow:hidden}
 .kb-topic:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .kb-topic.on{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-weight:600}
@@ -194,17 +194,17 @@ window.__ModuleLoader__.load({
 .kb-note{color:var(--dsw-alias-label-secondary);font-size:12px;margin-bottom:6px}
 .kb-err{color:var(--dsw-alias-state-error-primary);font-size:12px;padding:6px 16px}
 .kb-ok{color:var(--dsw-alias-state-success-primary);font-size:12px;padding:6px 16px}
-.kb-card{position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px 9px 6px;background:var(--dsw-alias-bg-layer-1);cursor:pointer;transition:border-color .12s ease,background .12s ease}
+.kb-card{position:relative;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px 9px 6px;background:var(--kb-rail-bg,var(--dsw-alias-bg-layer-1));cursor:pointer;transition:border-color .12s ease,background .12s ease}
 .kb-card:hover{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}
 .kb-card.archived{opacity:.72}
 .kb-card-head{display:flex;align-items:center;gap:5px;min-width:0}
-.kb-card-title{flex:1 1 auto;min-width:0;font-weight:600;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kb-card-title{flex:1 1 auto;min-width:0;font-weight:650;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kb-badge{flex:none;font-size:10px;line-height:1.6;padding:0 4px;border-radius:4px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
 .kb-badge.warn{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
 .kb-badge.idle{color:var(--dsw-alias-state-idle-primary);border-color:var(--dsw-alias-state-idle-primary)}
 .kb-meta{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
 .kb-q{color:var(--dsw-alias-label-secondary);font-size:11.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.kb-text{margin-top:3px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.kb-text{margin-top:3px;font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .kb-tags{display:flex;gap:4px;margin-top:4px;overflow:hidden;max-height:18px}
 .kb-tag{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-radius:4px;padding:0 4px}
 .kb-card-foot{display:flex;align-items:center;gap:6px;margin-top:4px;padding-right:76px;font-size:10.5px;color:var(--dsw-alias-label-secondary)}
@@ -218,13 +218,26 @@ window.__ModuleLoader__.load({
 .kb-mini.danger:hover{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-bg-base)}
 .kb-mini:disabled{opacity:.45;cursor:default}
 .kb-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.58);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
-.kb-modal{display:flex;flex-direction:column;width:min(920px,94vw);height:84vh;max-height:88vh;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,.45);overflow:hidden;background:var(--kb-modal-bg,var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-layer-1)))}
+.kb-modal{--kb-surface:var(--kb-modal-bg,var(--dsw-alias-bg-overlay,#fff));display:flex;flex-direction:column;width:min(920px,94vw);height:auto;max-height:88vh;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,.45);overflow:hidden;background:var(--kb-surface)}
 .kb-modal-head{display:flex;align-items:flex-start;gap:8px;padding:16px 20px 8px}
 .kb-modal-title{flex:1 1 auto;min-width:0;font-size:18px;font-weight:600;line-height:1.4;word-break:break-word}
 .kb-modal-body{flex:1 1 auto;min-height:0;overflow:auto;padding:0 20px 14px}
 .kb-modal-badges{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
 .kb-modal-q{font-size:13.5px;color:var(--dsw-alias-label-secondary);margin-bottom:8px;word-break:break-word}
-.kb-modal-text{font-size:15px;line-height:1.75;white-space:pre-wrap;word-break:break-word}
+.kb-modal-text{font-size:14.5px;line-height:1.8;white-space:pre-wrap;word-break:break-word}
+.kb-blocks{word-break:break-word}
+.kb-p{margin:0 0 9px;white-space:pre-wrap}
+.kb-p:last-child{margin-bottom:0}
+.kb-blocks>.kb-p:first-child{font-size:15.5px;font-weight:600;line-height:1.65;margin:0 0 15px;color:var(--dsw-alias-label-primary)}
+.kb-list{margin:0 0 9px;padding:0;list-style:none}
+.kb-li{display:flex;gap:8px;align-items:flex-start;margin:0 0 7px}
+.kb-li-marker{flex:none;min-width:16px;color:var(--dsw-alias-brand-primary);font-weight:700}
+.kb-li-text{flex:1 1 auto;min-width:0;white-space:pre-wrap;line-height:1.8}
+.kb-quote{margin:0 0 10px;padding:7px 10px;border-left:3px solid var(--dsw-alias-brand-primary);border-radius:0 6px 6px 0;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
+.kb-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--kb-surface,var(--dsw-alias-bg-base)));border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 22%,var(--kb-surface,var(--dsw-alias-bg-base)));color:var(--dsw-alias-label-primary)}
+.kb-strong{font-weight:700}
+mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoration:underline;text-decoration-color:var(--dsw-alias-state-warn-primary);text-decoration-thickness:2px;text-underline-offset:3px;text-decoration-skip-ink:none}
+.kb-more{color:var(--dsw-alias-label-secondary)}
 .kb-modal-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--kb-modal-bg,var(--dsw-alias-bg-overlay))}
 .kb-modal-foot .kb-btn{font-size:13px;padding:5px 12px}
 .kb-modal-meta{font-size:12px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
@@ -247,6 +260,51 @@ window.__ModuleLoader__.load({
      */
     const SOLID_VAR = '--kb-modal-bg'
 
+    /** canvas 上下文（惰性创建）：把任意色彩空间转成真实 RGBA 时用。 */
+    let colorCanvasCtx = null
+
+    function getColorCtx() {
+      if (colorCanvasCtx !== null) return colorCanvasCtx
+      try {
+        colorCanvasCtx = document.createElement('canvas').getContext('2d', { willReadFrequently: true })
+      } catch {
+        colorCanvasCtx = false
+      }
+      return colorCanvasCtx
+    }
+
+    /**
+     * 任意 CSS 颜色字符串 → [r, g, b, a]。
+     * 主题 token 可能是 rgb()/rgba()，也可能是 oklch()/color(srgb …) 这类新色彩空间；
+     * 只认 rgba() 的话，后者的 alpha 会直接丢掉，底色压不实（面板就一直透光）。
+     * 所以先走正则快速路径，再拿 canvas 画一像素读回来做兜底。
+     */
+    function parseColor(raw) {
+      const text = String(raw || '').trim()
+      if (!text) return null
+      const matched = text.match(/rgba?\(([^)]+)\)/)
+      if (matched) {
+        const nums = matched[1]
+          .split(/[,\s/]+/)
+          .map((value) => parseFloat(value))
+          .filter((value) => !Number.isNaN(value))
+        if (nums.length >= 3) return [nums[0], nums[1], nums[2], nums.length > 3 ? nums[3] : 1]
+      }
+      const ctx = getColorCtx()
+      if (!ctx) return null
+      try {
+        ctx.clearRect(0, 0, 1, 1)
+        ctx.fillStyle = '#000000'
+        ctx.fillStyle = text
+        ctx.fillRect(0, 0, 1, 1)
+        const data = ctx.getImageData(0, 0, 1, 1).data
+        if (data[3] === 0) return [data[0], data[1], data[2], 0]
+        return [data[0], data[1], data[2], data[3] / 255]
+      } catch {
+        return null
+      }
+    }
+
     function flattenToken(token) {
       if (typeof document === 'undefined' || !document.body) return null
       let probe = null
@@ -256,15 +314,10 @@ window.__ModuleLoader__.load({
         probe.style.color = `var(${token})`
         document.body.appendChild(probe)
         const raw = (typeof getComputedStyle === 'function' ? getComputedStyle(probe).color : '') || ''
-        const matched = raw.match(/rgba?\(([^)]+)\)/)
-        if (!matched) return null
-        const nums = matched[1]
-          .split(/[,\s/]+/)
-          .map((value) => parseFloat(value))
-          .filter((value) => !Number.isNaN(value))
-        if (nums.length < 3) return null
-        const [r, g, b] = nums
-        const alpha = nums.length > 3 ? nums[3] : 1
+        const rgba = parseColor(raw)
+        if (!rgba) return null
+        const [r, g, b] = rgba
+        const alpha = rgba[3]
         if (alpha >= 1) return `rgb(${r}, ${g}, ${b})`
         const light = r + g + b > 384
         const base = light ? [250, 250, 252] : [22, 23, 27]
@@ -279,8 +332,14 @@ window.__ModuleLoader__.load({
 
     function applySolidSurface() {
       if (typeof document === 'undefined' || !document.documentElement) return
-      const solid = flattenToken('--dsw-alias-bg-overlay') || flattenToken('--dsw-alias-bg-layer-1')
-      if (solid) document.documentElement.style.setProperty(SOLID_VAR, solid)
+      const overlay = flattenToken('--dsw-alias-bg-overlay')
+      const layer1 = flattenToken('--dsw-alias-bg-layer-1')
+      const layer2 = flattenToken('--dsw-alias-bg-layer-2')
+      const base = flattenToken('--dsw-alias-bg-base')
+      if (overlay || layer1) document.documentElement.style.setProperty(SOLID_VAR, overlay || layer1)
+      if (base) document.documentElement.style.setProperty('--kb-panel-bg', base)
+      if (layer1) document.documentElement.style.setProperty('--kb-rail-bg', layer1)
+      if (layer2) document.documentElement.style.setProperty('--kb-chip-bg', layer2)
     }
 
     function ensureStyle() {
@@ -370,6 +429,254 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // ---------------------------------------------------------------- 正文解析
+    // 极简 Markdown 子集：段落、列表（- / • / ① / 1.）、行内枚举、**粗体**、`代码`、> 引用、【高亮】。
+    // 纯函数，不碰 React，方便直接单测；渲染时切成节点，不用 innerHTML（没有 XSS 面）。
+
+    /** 行内标记：粗体 / 代码 / 高亮。代码优先切，免得代码里的星号被当成粗体。 */
+    function parseInline(text) {
+      const runs = []
+      const codePattern = /`([^`]+)`/g
+      let last = 0
+      let match
+      while ((match = codePattern.exec(text))) {
+        if (match.index > last) runs.push(...parsePlain(text.slice(last, match.index)))
+        runs.push({ text: match[1], code: true })
+        last = match.index + match[0].length
+      }
+      if (last < text.length) runs.push(...parsePlain(text.slice(last)))
+      return runs.length ? runs : [{ text: '' }]
+    }
+
+    /** 【高亮】优先于粗体切分，【】里的内容不再解释别的标记。 */
+    function parsePlain(text) {
+      const runs = []
+      const hlPattern = /【([^】]+)】/g
+      let last = 0
+      let match
+      while ((match = hlPattern.exec(text))) {
+        if (match.index > last) runs.push(...splitBold(text.slice(last, match.index)))
+        runs.push({ text: match[1], hl: true })
+        last = match.index + match[0].length
+      }
+      if (last < text.length) runs.push(...splitBold(text.slice(last)))
+      return runs
+    }
+
+    function splitBold(text) {
+      const runs = []
+      const boldPattern = /\*\*([^*]+)\*\*/g
+      let last = 0
+      let match
+      while ((match = boldPattern.exec(text))) {
+        if (match.index > last) runs.push({ text: text.slice(last, match.index) })
+        runs.push({ text: match[1], bold: true })
+        last = match.index + match[0].length
+      }
+      if (last < text.length) runs.push({ text: text.slice(last) })
+      return runs
+    }
+
+    /** 行首的「术语：解释」——术语短且无标点时就加粗，纯渲染、不改数据。 */
+    const LEAD_TERM = /^([^，。；、：:]{1,12})[：:]/
+
+    function boldLeadTerm(runs) {
+      if (!runs.length) return runs
+      const first = runs[0]
+      if (first.bold || first.code || first.hl) return runs
+      const text = String(first.text == null ? '' : first.text)
+      const match = LEAD_TERM.exec(text)
+      if (!match) return runs
+      const term = match[1].trim()
+      if (!term) return runs
+      const rest = text.slice(match[0].length)
+      return [{ text: term, bold: true }, { text: '：' + rest }, ...runs.slice(1)]
+    }
+
+    /** 行首是列表记号：- * + • / 1. 1) / ① */
+    const LINE_LIST = /^(\s*)([-*+•]|\d{1,2}[.)]|[①-⑳])\s+(.*)$/
+
+    /**
+     * 段落里行内连写的枚举（①②③ / 1. 2. 3.）。
+     * 存量卡片常常一整段写完，拆出来才有层次；不拆也不会错。
+     */
+    function enumerationItems(text) {
+      const pattern = /[①-⑳]|\d{1,2}[.)、]/g
+      const marks = []
+      let match
+      while ((match = pattern.exec(text))) {
+        const marker = match[0]
+        const end = match.index + marker.length
+        const after = text[end] ?? ''
+        // 8.0 这类版本号不是枚举
+        if (/^\d/.test(marker) && /^\d/.test(after)) continue
+        const before = match.index === 0 ? '' : text[match.index - 1]
+        // 记号前面得是边界，否则多半是普通词里带的符号
+        if (before !== '' && !/[\s。；，、：:）)]/.test(before)) continue
+        marks.push({ marker, start: match.index, end })
+      }
+      if (marks.length === 0) return null
+      if (marks.length === 1 && marks[0].start !== 0) return null
+      // 全是数字记号时必须连号，否则可能只是巧合
+      if (marks.every((item) => /^\d/.test(item.marker))) {
+        for (let i = 1; i < marks.length; i++) {
+          const prev = Number(marks[i - 1].marker.match(/^\d+/)[0])
+          const cur = Number(marks[i].marker.match(/^\d+/)[0])
+          if (cur !== prev + 1) return null
+        }
+      }
+      const items = []
+      if (marks[0].start > 0) {
+        const head = text.slice(0, marks[0].start).trim()
+        if (head) items.push({ marker: '', text: head })
+      }
+      for (let i = 0; i < marks.length; i++) {
+        const next = marks[i + 1]
+        items.push({
+          marker: marks[i].marker,
+          text: text.slice(marks[i].end, next ? next.start : text.length).trim(),
+        })
+      }
+      return items
+    }
+
+    /** 正文 → 块序列：p 段落 / list 列表 / quote 引用 */
+    function parseBody(text) {
+      const blocks = []
+      const lines = String(text ?? '').split(/\r\n|\r|\n/)
+      let paragraph = []
+      let list = null
+      const flushParagraph = () => {
+        if (paragraph.length === 0) return
+        const joined = paragraph.join('\n')
+        paragraph = []
+        const items = enumerationItems(joined)
+        if (items) {
+          blocks.push({
+            type: 'list',
+            items: items.map((item) => ({ marker: item.marker, runs: parseInline(item.text) })),
+          })
+          return
+        }
+        blocks.push({ type: 'p', runs: parseInline(joined) })
+      }
+      const flushList = () => {
+        if (list) {
+          blocks.push(list)
+          list = null
+        }
+      }
+      for (const raw of lines) {
+        const line = raw.replace(/\s+$/, '')
+        if (!line.trim()) {
+          flushParagraph()
+          flushList()
+          continue
+        }
+        const quote = /^>\s?(.*)$/.exec(line)
+        if (quote) {
+          flushParagraph()
+          flushList()
+          blocks.push({ type: 'quote', runs: parseInline(quote[1]) })
+          continue
+        }
+        const item = LINE_LIST.exec(line)
+        const inline = enumerationItems(line)
+        if (inline && inline.length > 1) {
+          // 一行里连写多个记号（1. … 2. … 3. …）：整行拆成列表，别只吃掉第一个
+          flushParagraph()
+          flushList()
+          blocks.push({
+            type: 'list',
+            items: inline.map((entry) => ({ marker: entry.marker, runs: parseInline(entry.text) })),
+          })
+          continue
+        }
+        if (item) {
+          flushParagraph()
+          if (!list) list = { type: 'list', items: [] }
+          list.items.push({ marker: item[2], runs: parseInline(item[3]) })
+          continue
+        }
+        flushList()
+        paragraph.push(line)
+      }
+      flushParagraph()
+      flushList()
+      for (const block of blocks) {
+        if (block.type === 'list') {
+          for (const item of block.items) item.runs = boldLeadTerm(item.runs)
+        } else {
+          block.runs = boldLeadTerm(block.runs)
+        }
+      }
+      return blocks
+    }
+
+    function renderRuns(runs, key) {
+      return runs.map((run, index) => {
+        const props = { key: key + index }
+        if (run.code) {
+          props.className = 'kb-code'
+          return h('code', props, run.text)
+        }
+        if (run.hl) {
+          props.className = 'kb-hl-run'
+          return h('mark', props, run.text)
+        }
+        if (run.bold) {
+          props.className = 'kb-strong'
+          return h('strong', props, run.text)
+        }
+        return h('span', props, run.text)
+      })
+    }
+
+    /** 详情浮层：完整块结构 */
+    function BodyBlocks(props) {
+      const blocks = parseBody(props.body)
+      return h(
+        'div',
+        { className: 'kb-blocks' },
+        blocks.map((block, index) => {
+          const key = 'b' + index + '-'
+          if (block.type === 'list') {
+            return h(
+              'ul',
+              { className: 'kb-list', key: 'b' + index },
+              block.items.map((item, itemIndex) =>
+                h(
+                  'li',
+                  { className: 'kb-li', key: 'b' + index + 'i' + itemIndex },
+                  h('span', { className: 'kb-li-marker' }, /[-*+•]/.test(item.marker) ? '•' : item.marker),
+                  h('span', { className: 'kb-li-text' }, renderRuns(item.runs, key + 'i' + itemIndex + '-')),
+                ),
+              ),
+            )
+          }
+          if (block.type === 'quote') {
+            return h('blockquote', { className: 'kb-quote', key: 'b' + index }, renderRuns(block.runs, key))
+          }
+          return h('p', { className: 'kb-p', key: 'b' + index }, renderRuns(block.runs, key))
+        }),
+      )
+    }
+
+    /** 列表卡片：只取第一块当摘要（第一段或第一条），其余用省略号收尾 */
+    function CardBody(props) {
+      const blocks = parseBody(props.body)
+      if (blocks.length === 0) return null
+      const first = blocks[0]
+      const runs = first.type === 'list' ? (first.items[0] ? first.items[0].runs : []) : first.runs
+      const more = blocks.length > 1 || (first.type === 'list' && first.items.length > 1)
+      return h(
+        'span',
+        { className: 'kb-preview' },
+        renderRuns(runs, 'c-'),
+        more ? h('span', { className: 'kb-more' }, '…') : null,
+      )
+    }
+
     function EntryCard(props) {
       const { entry, t, onOpen, onArchive, onRestore, onDelete, busy, score, coverage } = props
       const [confirming, setConfirming] = useState(false)
@@ -413,7 +720,7 @@ window.__ModuleLoader__.load({
           archived ? h(Badge, { tone: 'idle' }, t('archivedTag')) : null,
         ),
         entry.q ? h('div', { className: 'kb-q' }, 'Q ' + entry.q) : null,
-        h('div', { className: 'kb-text' }, entry.body),
+        h('div', { className: 'kb-text' }, h(CardBody, { body: entry.body })),
         entry.tags && entry.tags.length
           ? h(
               'div',
@@ -515,7 +822,7 @@ window.__ModuleLoader__.load({
               archived ? h(Badge, { tone: 'idle' }, t('archivedTag')) : null,
             ),
             entry.q ? h('div', { className: 'kb-modal-q' }, 'Q ' + entry.q) : null,
-            h('div', { className: 'kb-modal-text' }, entry.body),
+            h('div', { className: 'kb-modal-text' }, h(BodyBlocks, { body: entry.body })),
           ),
           h(
             'div',
@@ -965,6 +1272,7 @@ window.__ModuleLoader__.load({
     exports.name = 'learning-kb-ui'
     exports.inject = ['slots', 'locale']
     exports.apply = apply
+    exports.parseBody = parseBody
     }
 
     /** 把任意抛出物整理成可以贴进面板的文本 */

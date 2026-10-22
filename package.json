@@ -1,6 +1,6 @@
 {
   "name": "dsh-study-mode",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "Learning-mode agent preset for DeepSeek Harness: topic knowledge bases with 4-tier retrieval, plus an embedded knowledge-base panel in the sidebar.",
   "keywords": [
     "deepseek-harness",
@@ -44,7 +44,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/kb.test.mjs && node test/plugin.test.mjs && node test/tools-schema.test.mjs && node test/ui.test.mjs && node test/client.test.mjs",
+    "test": "node test/format.test.mjs && node test/kb.test.mjs && node test/plugin.test.mjs && node test/tools-schema.test.mjs && node test/ui.test.mjs && node test/client.test.mjs",
     "check": "node scripts/check.mjs",
     "verify": "npm run check && npm test"
   },

@@ -14,9 +14,11 @@
 
 import os from 'node:os'
 import path from 'node:path'
+import fs from 'node:fs'
 
 import { createStore } from '../plugin/store.js'
 import { rankDocs } from '../plugin/rank.js'
+import { formatBody } from '../plugin/format.js'
 
 const argv = process.argv.slice(2)
 const command = argv[0]
@@ -35,6 +37,7 @@ function parseFlags(args) {
   const flags = {
     all: false,
     verified: false,
+    apply: false,
     limit: null,
     topic: null,
     title: null,
@@ -52,6 +55,7 @@ function parseFlags(args) {
     const item = args[i]
     if (item === '--all') flags.all = true
     else if (item === '--verified') flags.verified = true
+    else if (item === '--apply') flags.apply = true
     else if (item.startsWith('--')) {
       const key = item.slice(2)
       const value = args[++i]
@@ -237,6 +241,61 @@ function cmdAdd() {
   }
 }
 
+/**
+ * 把连续正文重排成面板的块结构（只加换行和项目符号，不改字）。
+ * 默认只预览；--apply 才写盘，写前先备份 kb.jsonl。
+ */
+function cmdReformat() {
+  const topics = store.listTopics()
+  let changed = 0
+  let skipped = 0
+  const preview = []
+  for (const topic of topics) {
+    const entries = store.readEntries(topic.slug)
+    for (const entry of entries) {
+      const next = formatBody(entry.body)
+      if (!next) {
+        skipped++
+        continue
+      }
+      changed++
+      preview.push({ topic, entry, next })
+    }
+  }
+  const limit = flags.limit || 8
+  console.log(`可重排 ${changed} 条，跳过 ${skipped} 条（已有结构 / ①序列 / 无可拆结构）`)
+  if (!changed) return
+  console.log('')
+  for (const item of preview.slice(0, limit)) {
+    console.log(`--- [${item.topic.name}] ${item.entry.title}`)
+    console.log('  旧: ' + item.entry.body)
+    console.log('  新:')
+    for (const line of item.next.split('\n')) console.log('      ' + line)
+    console.log('')
+  }
+  if (preview.length > limit) console.log(`（还有 ${preview.length - limit} 条，只列前 ${limit} 条）\n`)
+  if (!flags.apply) {
+    console.log('这是预览。确认无误后加 --apply 真正写入（写前会自动备份 kb.jsonl）。')
+    return
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  for (const topic of topics) {
+    const file = path.join(store.root, 'topics', topic.slug, 'kb.jsonl')
+    if (fs.existsSync(file)) fs.copyFileSync(file, file + '.bak-' + stamp)
+  }
+  let written = 0
+  for (const item of preview) {
+    store.updateEntry({
+      id: item.entry.id,
+      topic: item.topic.slug,
+      sessionId: null,
+      fields: { body: item.next },
+    })
+    written++
+  }
+  console.log(`已重排 ${written} 条（每条版本号 +1）；备份：kb.jsonl.bak-${stamp}`)
+}
+
 switch (command) {
   case 'stats':
     cmdStats()
@@ -256,6 +315,9 @@ switch (command) {
   case 'add':
     cmdAdd()
     break
+  case 'reformat':
+    cmdReformat()
+    break
   default:
     console.log(`用法:
   node scripts/kb.mjs stats
@@ -263,6 +325,7 @@ switch (command) {
   node scripts/kb.mjs list [主题] [--all] [--limit N]
   node scripts/kb.mjs search <关键词> [--topic 主题] [--all] [--limit N]
   node scripts/kb.mjs show <id>
+  node scripts/kb.mjs reformat [--apply] [--limit N]   # 正文重排：默认预览，--apply 才写
   node scripts/kb.mjs add <主题> --title "标题" --body "正文" [--tags a,b] [--source-type user|file|web|model] [--source-ref 说明] [--locator p.5] [--applies-to "MySQL 8.0"] [--verified]`)
     if (command) process.exitCode = 2
 }
