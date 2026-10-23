@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 
 import {
-  MAX_RELATED,
+  RELATED_LIMIT,
   RERANK_CANDIDATES,
   RERANK_MAX_TOKENS,
   RERANK_RETRY_MAX_TOKENS,
@@ -68,7 +68,65 @@ await check('正文摘要会截断，不把整篇塞进提示词', () => {
 
 await check('候选上限常量合理（不然每次检索都烧一大段上下文）', () => {
   assert.ok(RERANK_CANDIDATES >= 3 && RERANK_CANDIDATES <= 20)
-  assert.ok(MAX_RELATED >= 1 && MAX_RELATED <= 5)
+  // 2026-10-23 用户定：相关知识点不限制数量（宽松档，界面里折叠 + 点开看正文）
+  assert.equal(RELATED_LIMIT, Infinity)
+})
+
+// 2026-10-23 用户实测：问 C++ 的四个方向，30 张卡里 12 张不是 C++ 的 —— related 判据太松。
+// 但同一天晚上又反过来：判据收得太死，命中 4 条时 related 只剩 1 条。
+// related 是**宽松档**：同领域的相邻知识点要给，只有「共享一个通用词」才 drop。
+await check('related 判据：同领域相关要给，只共享一个通用词才算 drop', () => {
+  const prompt = buildRerankPrompt('STL 容器', HITS)
+  assert.match(prompt, /同一个主题、同一个领域/)
+  assert.match(prompt, /只是共享一个词/)
+  assert.match(prompt, /一律 drop/)
+  assert.match(prompt, /宁可多给/, 'related 是宽松档，不许收得太死')
+  assert.match(prompt, /同一方向的相邻知识点/, '要点明相邻知识点也算 related（问 STL 时 vector / 模板 / 迭代器）')
+  assert.match(prompt, /相邻知识点不算凑数/, '别把「宁缺毋滥」读成 related 越少越好')
+})
+await check('明确允许模型三个数组全留空（不给许可它就会硬塞）', () => {
+  const prompt = buildRerankPrompt('STL 容器', HITS)
+  assert.match(prompt, /一条都不相关就三个数组都留空/)
+})
+await check('提示词明说不限条数（match 和 related 都不许模型自己砍）', () => {
+  const prompt = buildRerankPrompt('STL 容器', HITS)
+  assert.match(prompt, /match 最多 2 条/, '广度档：每个方向命中一两条')
+  assert.match(prompt, /related \*\*不限条数\*\*/, '广度档：相关不限条数')
+  assert.match(prompt, /同一个主题、同一个领域、确实相关的都留下/)
+})
+await check('具体问题用精确档：命中一两条、相关三条（用户实测「皮命中太多」）', () => {
+  const exact = buildRerankPrompt('什么是 LRU cache', HITS, 'exact')
+  assert.match(exact, /这是\*\*具体问题\*\*/, '要说清要少而准')
+  assert.match(exact, /match 最多 2 条/, '命中只留最直接的一两条')
+  assert.match(exact, /related 最多 3 条/, '相关只留真正相邻的几条')
+})
+await check('模型给了几条相关补充就出几条，不再砍到 2 条', () => {
+  // 2026-10-23 用户：「相关知识点不用限制数量，既然这个是比较宽松的筛选，那自然会有很多」
+  const verdict = normalizeVerdict(
+    { match: ['a'], related: ['b', 'c', 'd'] },
+    new Set(['a', 'b', 'c', 'd']),
+  )
+  const split = splitByVerdict(HITS, verdict, { limit: 3 })
+  assert.deepEqual(split.related.map(item => item.id), ['b', 'c', 'd'])
+  const applied = applyRerankText('{"match":["a"],"related":["b","c","d"],"drop":[]}', HITS, { limit: 3 })
+  assert.deepEqual(applied.related.map(item => item.id), ['b', 'c', 'd'])
+})
+await check('全判成 related 时只把第一条提到命中，其余照样全留', () => {
+  const verdict = normalizeVerdict({ match: [], related: ['b', 'c', 'd'] }, new Set(['b', 'c', 'd']))
+  const split = splitByVerdict(HITS, verdict, { limit: 3 })
+  assert.equal(split.matched.length, 0)
+  assert.equal(split.related.length, 3, '别的方向的相关补充不能被顺手砍掉')
+})
+
+
+// 2026-10-23 用户实测：问 C++ 的四个方向，16 条命中有 4 条跨领域
+// （容器化技术/分布式、MEMORY 表/mysql-进阶、服务层/mysql-进阶、常量指针/C语言）。
+await check('候选行要带「领域」，模型才看得出跨领域', () => {
+  const withDomain = [hit('a', '什么是容器化技术', '程序加配置打包进容器'), Object.assign(hit('b', 'STL 容器', 'vector 是连续空间'), { appliesTo: 'C++' })]
+  const prompt = buildRerankPrompt('STL 容器', withDomain)
+  assert.match(prompt, /领域 C\+\+/, '有领域的候选要显式标出来')
+  assert.match(prompt, /主题或领域和问题所在的技术方向明显不同/, '要给跨领域的 drop 规则')
+  assert.match(prompt, /一律 drop/, '不能因为共享一个词就留')
 })
 
 console.log('解析')
@@ -134,9 +192,20 @@ await check('两组都保持本地分数顺序，不重排', () => {
   assert.deepEqual(split.related.map(item => item.id), ['d'])
 })
 
-await check('命中条数受 limit 限制，相关补充受 MAX_RELATED 限制', () => {
+await check('match 默认不限条数：模型判几条就出几条（limit 不再截断）', () => {
+  // 2026-10-23 用户：「match 才不要限制数量，大模型觉得是匹配的那基本上是对的吧」
+  const verdict = normalizeVerdict(
+    { match: ['a', 'b', 'c'], related: ['d'] },
+    new Set(['a', 'b', 'c', 'd']),
+  )
+  const split = splitByVerdict(HITS, verdict, { limit: 2 })
+  assert.deepEqual(split.matched.map(item => item.id), ['a', 'b', 'c'], 'limit 不该再砍命中')
+  assert.deepEqual(split.related.map(item => item.id), ['d'], '不传 maxRelated 就不该被砍')
+})
+
+await check('显式传 maxMatch / maxRelated 时才按它收（内部仍可限量，默认全留）', () => {
   const verdict = normalizeVerdict({ match: ['a', 'b', 'c'], related: ['d'] }, new Set(['a', 'b', 'c', 'd']))
-  const split = splitByVerdict(HITS, verdict, { limit: 2, maxRelated: 0 })
+  const split = splitByVerdict(HITS, verdict, { maxMatch: 2, maxRelated: 0 })
   assert.deepEqual(split.matched.map(item => item.id), ['a', 'b'])
   assert.equal(split.related.length, 0)
 })
@@ -157,10 +226,12 @@ await check('返回垃圾文本 → 退回本地排序，卡片照常出', () =>
   assert.ok(split.reason.length > 0, '降级要留下原因')
 })
 
-await check('返回全 drop → 退回本地排序，不能一张卡片都没有', () => {
+await check('返回全 drop → 尊重模型，一条都不出（不硬塞噪声）', () => {
   const split = applyRerankText('{"match":[],"related":[],"drop":["a","b","c","d"]}', HITS, { limit: 3 })
-  assert.equal(split.used, false)
-  assert.equal(split.matched.length, 3)
+  assert.equal(split.used, true, '重排跑起来了，used 就该是 true')
+  assert.equal(split.matched.length, 0, '模型判全无关就不该硬塞命中（2026-10-23 用户实测噪声）')
+  assert.equal(split.related.length, 0)
+  assert.match(split.reason, /全部无关/)
 })
 
 await check('全判成 related → 把最有希望的那条提到命中', () => {

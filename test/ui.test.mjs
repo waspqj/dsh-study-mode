@@ -14,6 +14,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-ui-'))
 process.env.DSH_LEARN_ROOT = root
 
 const { createHandler, ROUTE_PREFIX, name, inject, resolveRoot } = await import('../plugin/index.js')
+const { registerSaveBatch, registerProposal, createStore, slugify } = await import('../plugin/store.js')
 
 let passed = 0
 async function check(label, fn) {
@@ -317,6 +318,283 @@ await check('同名标题按更新处理而不是重复新建', async () => {
   const hits = list.json.entries.filter(entry => entry.title === '连续写入 A')
   assert.equal(hits.length, 1)
   assert.equal(hits[0].body, '改过的正文')
+})
+
+console.log('写接口：确认写入（预览先行的落盘）')
+// 2026-10-23：learn_save 默认只预览，界面上的「确认写入 N 条」按钮走这个接口落盘。
+// 批次本身是进程级内存表，工具半侧登记、UI 半侧按 batchId 取回 —— 这里直接登记再打接口。
+await check('待写入批次能按 batchId 落盘', async () => {
+  const topicName = '先预览再写'
+  const cards = [{ title: '确认写入样例', body: '这一条是通过「先预览再写」流程写进来的。', tags: ['流程'] }]
+  const slug = slugify(topicName)
+  // 指纹闸门：这批内容必须真的预览过
+  createStore(root).markPreviewed(slug, cards)
+  const batchId = registerSaveBatch({
+    topicArg: topicName,
+    slug,
+    cards,
+    sessionId: null,
+    similarCount: 0,
+    bypassDuplicate: false,
+  })
+  const res = await post('/save', { batchId })
+  assert.equal(res.statusCode, 200, res.body)
+  assert.equal(res.json.status, 'written')
+  assert.equal(res.json.total, 1)
+  const list = await get('/entries', '?topic=' + topicName)
+  assert.equal(list.json.total, 1)
+  assert.equal(list.json.entries[0].title, '确认写入样例')
+})
+await check('同一个 batchId 不能写第二次', async () => {
+  const topicName = '先预览再写'
+  const cards = [{ title: '只写一次', body: '正文' }]
+  const slug = slugify(topicName)
+  createStore(root).markPreviewed(slug, cards)
+  const batchId = registerSaveBatch({ topicArg: topicName, slug, cards, sessionId: null, similarCount: 0 })
+  const first = await post('/save', { batchId })
+  assert.equal(first.statusCode, 200, first.body)
+  const second = await post('/save', { batchId })
+  assert.equal(second.statusCode, 404, '批次是一次性的')
+  assert.match(second.json.error, /过期/)
+})
+await check('没预览过的批次不能写', async () => {
+  const topicName = '没预览过的批次'
+  const cards = [{ title: '没预览过', body: '正文' }]
+  const batchId = registerSaveBatch({
+    topicArg: topicName,
+    slug: slugify(topicName),
+    cards,
+    sessionId: null,
+    similarCount: 0,
+  })
+  const res = await post('/save', { batchId })
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /还没有预览过/)
+})
+await check('不存在的 batchId 报 404 并说清怎么办', async () => {
+  const res = await post('/save', { batchId: 'b_根本没有这个批次' })
+  assert.equal(res.statusCode, 404)
+  assert.match(res.json.error, /过期/)
+})
+await check('缺 batchId 说清缺什么', async () => {
+  const res = await post('/save', {})
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /batchId/)
+})
+
+console.log('写接口：提议补条目 → 生成预览（2026-10-23 方案 A）')
+// 点「同意，出卡片预览」时由宿主调插件模型写正文；这里塞一个假模型。
+const fakeLlm = {
+  stream() {
+    return (async function* () {
+      yield { type: 'text-delta', text: 'RAII 把资源生命周期绑到对象上。' + String.fromCharCode(10) + '- 构造获取、析构释放' }
+    })()
+  },
+}
+const proposalHandler = createHandler({
+  getOrigin: () => SELF_ORIGIN,
+  ctx: { get: (name) => (name === 'llm' ? fakeLlm : undefined) },
+})
+const postTo = async (fn, route, body) => {
+  const res = makeRes()
+  await fn(makeReq({ method: 'POST', url: ROUTE_PREFIX + route, headers: jsonHeaders, body }), res)
+  return res
+}
+
+await check('同意提议 → 生成正文并给出待写入批次', async () => {
+  const topicName = '提议测试'
+  const proposalId = registerProposal({
+    topicArg: topicName,
+    slug: slugify(topicName),
+    topicName,
+    items: [{ title: 'RAII 资源管理', why: '库里没有独立条目' }],
+    sessionId: null,
+  })
+  const res = await postTo(proposalHandler, '/propose/accept', { proposalId })
+  assert.equal(res.statusCode, 200, res.body)
+  assert.equal(res.json.cards.length, 1)
+  assert.match(res.json.cards[0].body, /RAII/, '正文要用模型写出来的那份')
+  assert.ok(res.json.batchId, '要给出待写入批次，界面才能渲染「确认写入」')
+})
+
+await check('生成的卡片能按批次写进库', async () => {
+  const topicName = '提议测试2'
+  const proposalId = registerProposal({
+    topicArg: topicName,
+    slug: slugify(topicName),
+    topicName,
+    items: [{ title: 'STL 容器与迭代器体系', why: '只散在 vector 几条里' }],
+    sessionId: null,
+  })
+  const made = await postTo(proposalHandler, '/propose/accept', { proposalId })
+  const written = await postTo(proposalHandler, '/save', { batchId: made.json.batchId })
+  assert.equal(written.statusCode, 200, written.body)
+  assert.equal(written.json.status, 'written')
+  const list = await get('/entries', '?topic=' + topicName)
+  assert.equal(list.json.total, 1)
+})
+
+await check('不存在的提议 id 报 404 并说清怎么办', async () => {
+  const res = await postTo(proposalHandler, '/propose/accept', { proposalId: 'p_没有这个' })
+  assert.equal(res.statusCode, 404)
+  assert.match(res.json.error, /过期|重启/)
+})
+
+await check('没有模型服务时如实报「没能写出正文」', async () => {
+  const proposalId = registerProposal({
+    topicArg: '无模型主题',
+    slug: slugify('无模型主题'),
+    topicName: '无模型主题',
+    items: [{ title: 'X', why: 'y' }],
+    sessionId: null,
+  })
+  // 用不带 llm 的 handler
+  const noModel = createHandler({ getOrigin: () => SELF_ORIGIN, ctx: { get: () => undefined } })
+  const res = await postTo(noModel, '/propose/accept', { proposalId })
+  assert.equal(res.statusCode, 502)
+  assert.match(res.json.error, /没能写出卡片正文/)
+})
+
+await check('模型 429 失败时不作废提议，能直接再点一次（2026-10-23 实测）', async () => {
+  const brokenLlm = {
+    stream() {
+      throw new Error('429 rate_limit_error: 已达到 Token Plan 用量上限')
+    },
+  }
+  const broken = createHandler({ getOrigin: () => SELF_ORIGIN, ctx: { get: (name) => (name === 'llm' ? brokenLlm : undefined) } })
+  const proposalId = registerProposal({
+    topicArg: '额度测试',
+    slug: slugify('额度测试'),
+    topicName: '额度测试',
+    items: [{ title: 'RAII 的原理与应用', why: '库里没有独立条目' }],
+    sessionId: null,
+  })
+  const first = await postTo(broken, '/propose/accept', { proposalId })
+  assert.equal(first.statusCode, 502)
+  assert.match(first.json.error, /429|额度/, '要把「额度用完了」说出来，不能只甩 JSON')
+  assert.match(first.json.error, /再点一次/, '要告诉用户可以直接重试')
+  // 关键：提议没被作废 —— 第二次仍然是 502（模型还是坏的），而不是 404（过期）
+  const second = await postTo(broken, '/propose/accept', { proposalId })
+  assert.equal(second.statusCode, 502, '第二次不该报已过期（旧代码失败一次就 dropProposal）')
+})
+
+await check('模型只返回思考过程、没有正文时，要加预算重试（2026-10-23 实测 4212 字思考）', async () => {
+  // 根因：maxTokens=1200 全被思考吃掉 → 正文为空。
+  // 修法：预算放大 + 「不要思考」提示 + 第一次没正文就加预算重试。
+  let calls = 0
+  const budgets = []
+  const thinkingOnlyLlm = {
+    stream(input) {
+      calls++
+      budgets.push(input && input.maxTokens)
+      return (async function* () {
+        if (calls === 1) {
+          // 第一次：只有思考过程，没有正文
+          yield { type: 'reasoning-delta', text: '想了一堆'.repeat(300) }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+          return
+        }
+        yield { type: 'text-delta', text: 'TIME_WAIT 等 2MSL 是为了保证最后的 ACK 能重传。' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      })()
+    },
+  }
+  const handler = createHandler({
+    getOrigin: () => SELF_ORIGIN,
+    ctx: {
+      get: (name) => {
+        if (name === 'llm') return thinkingOnlyLlm
+        // 固定模型（source=session → 不再试兜底模型），这样调用次数和预算才是可预期的
+        if (name === 'agentDefaultModel') {
+          return { currentSelection: () => ({ provider: 'test', model: 'test-model' }) }
+        }
+        return undefined
+      },
+    },
+  })
+  const proposalId = registerProposal({
+    topicArg: '思考测试',
+    slug: slugify('思考测试'),
+    topicName: '思考测试',
+    items: [{ title: 'TIME_WAIT 为什么等 2MSL', why: '库里没有独立条目' }],
+    sessionId: null,
+  })
+  const res = await postTo(handler, '/propose/accept', { proposalId })
+  assert.equal(res.statusCode, 200, res.body)
+  assert.equal(calls, 2, '第一次只有思考 → 应该重试一次')
+  assert.ok(budgets[0] >= 3000, '第一次的预算要够思考型模型用，实际 ' + budgets[0])
+  assert.ok(budgets[1] > budgets[0], '重试要加预算，实际 ' + budgets.join('/'))
+  assert.match(res.json.cards[0].body, /TIME_WAIT/, '重试后要拿到正文')
+})
+
+await check('只补选中的那几条（用户只想补其中几条）', async () => {
+  const topicName = '选几条测试'
+  const proposalId = registerProposal({
+    topicArg: topicName,
+    slug: slugify(topicName),
+    topicName,
+    items: [
+      { title: '选中的那条', why: '要补' },
+      { title: '没选的那条', why: '不要补' },
+      { title: '也没选的那条', why: '不要补' },
+    ],
+    sessionId: null,
+  })
+  const res = await postTo(proposalHandler, '/propose/accept', { proposalId, items: [0] })
+  assert.equal(res.statusCode, 200, res.body)
+  assert.equal(res.json.cards.length, 1, '只生成选中的那一条')
+  assert.equal(res.json.cards[0].title, '选中的那条')
+  // 没全选完 → 提议要留着，用户还能改选择再点一次
+  const again = await postTo(proposalHandler, '/propose/accept', { proposalId, items: [1] })
+  assert.equal(again.statusCode, 200, '提议要还在：' + again.body)
+  assert.equal(again.json.cards[0].title, '没选的那条')
+})
+
+await check('一条都没选就点同意 → 说清要选至少一条', async () => {
+  const topicName = '没选测试'
+  const proposalId = registerProposal({
+    topicArg: topicName,
+    slug: slugify(topicName),
+    topicName,
+    items: [{ title: '随便一条', why: 'x' }],
+    sessionId: null,
+  })
+  const res = await postTo(proposalHandler, '/propose/accept', { proposalId, items: [] })
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /至少/)
+})
+
+await check('可以选补到哪个主题（用户要求「加入到哪个主题也要可以选」）', async () => {
+  const from = '提议来源主题'
+  const to = '提议目标主题'
+  createStore(root).createTopic(to)
+  const proposalId = registerProposal({
+    topicArg: from,
+    slug: slugify(from),
+    topicName: from,
+    items: [{ title: '换个主题补的条目', why: 'y' }],
+    sessionId: null,
+  })
+  const res = await postTo(proposalHandler, '/propose/accept', { proposalId, topic: to })
+  assert.equal(res.statusCode, 200, res.body)
+  assert.equal(res.json.topicName, to, '要按用户选的主题写入')
+  const written = await postTo(proposalHandler, '/save', { batchId: res.json.batchId })
+  assert.equal(written.statusCode, 200, written.body)
+  const list = await get('/entries', '?topic=' + to)
+  assert.equal(list.json.total, 1, '条目要落在选中的主题里')
+})
+
+await check('选了不存在的主题要说清（400）', async () => {
+  const proposalId = registerProposal({
+    topicArg: '主题不存在测试',
+    slug: slugify('主题不存在测试'),
+    topicName: '主题不存在测试',
+    items: [{ title: '一条', why: 'z' }],
+    sessionId: null,
+  })
+  const res = await postTo(proposalHandler, '/propose/accept', { proposalId, topic: '根本没有这个主题' })
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /不存在/)
 })
 
 console.log('')

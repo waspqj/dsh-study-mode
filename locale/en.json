@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Study Mode",
-    "description": "Topic knowledge bases with 4-tier retrieval. Pick the \"Study Mode\" preset when starting a session: answers look up the topic library first, then the other topic libraries, then the model's own knowledge (marked unverified), and only reach the web for facts that must be checked (marked with the date). The book icon in the sidebar opens the knowledge-base panel: browse by topic, search, archive, restore, delete, add."
+    "description": "Learn knowledge into topic libraries and look it up when you ask. Pick the \"Study Mode\" preset when starting a session: answers search the library first and cite the topic; if nothing matches, the model's own knowledge is used and marked unverified, and only facts that must be checked reach the web (marked with the date). The book icon in the sidebar opens the knowledge-base panel: browse by topic, search, archive/restore, add by hand, AI fact-check. Specific questions cost the least — just ask, the agent searches for you."
   }
 }

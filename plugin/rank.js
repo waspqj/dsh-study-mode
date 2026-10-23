@@ -13,7 +13,13 @@
 const K1 = 1.2
 const B = 0.75
 
-const FIELD_WEIGHTS = { title: 3, tags: 2, q: 2, body: 1 }
+// appliesTo 是「领域/技术栈」这一层（C++、网络、操作系统…），和 tags 权重同级。
+//
+// 2026-10-23 用户踩到：问「C++ 的常考点」时只拿到 tag=C++ 的 34 条，另外 17 条
+// C++ 相关的（C++11 新特性、智能指针、C 语言基础、设计模式）一条都没出来。
+// 根因之一就在这里 —— 条目上的 appliesTo 明明写着 "C++"，但它从没进过索引，
+// 所以哪怕 query 写 "C++" 也召不回那些正文不含 "C++" 字样的条目。
+const FIELD_WEIGHTS = { title: 3, tags: 2, appliesTo: 2, q: 2, body: 1 }
 
 // 查询侧停用词：疑问句式和虚词。
 //
@@ -128,6 +134,8 @@ function fieldTokens(entry, field) {
       return tokenize(entry.title)
     case 'tags':
       return tokenize((entry.tags || []).join(' '))
+    case 'appliesTo':
+      return tokenize(entry.appliesTo || '')
     case 'q':
       return tokenize(entry.q || '')
     case 'body':
@@ -285,3 +293,33 @@ export function createRanker(docs) {
 export function rankDocs(docs, query, limit = 3, options = {}) {
   return createRanker(docs).search(query, limit, options)
 }
+
+/** 方向分隔符：顿号 / 逗号 / 分号 / 斜杠 / 竖线 / 中点。 */
+const SEGMENT_SEP = /[、，,;；/|·]+/
+/** 每个方向尾部常带的套话，拆完要摘掉（「C++11 新特性的相关知识点」→「C++11 新特性」）。 */
+const SEGMENT_TAIL = /\s*的?\s*(相关)?\s*(知识点|考点|内容|条目)\s*$/
+
+/**
+ * 把「一句话点名好几个方向」的查询拆成方向列表。
+ *
+ * 只在用户**显式用顿号/逗号分隔**时才拆 —— 普通问句（「什么是 LRU cache」）原样不拆。
+ * 为什么需要它（2026-10-23 用户实测）：问「STL、智能指针、RAII、C++11 新特性的相关知识点」，
+ * 模型把方向改写成更窄的词（STL → vector 迭代器）分别检索，结果智能指针 / RAII / STL 组件
+ * 那几条一条都没进候选池。方向是用户点名的，就不该由模型再翻译一遍。
+ *
+ * @param {string} query 原始查询
+ * @returns {string[]} 方向列表；不值得拆时返回空数组
+ */
+export function splitQuerySegments(query) {
+  const text = String(query ?? '').trim()
+  if (!text || !SEGMENT_SEP.test(text)) return []
+  const parts = text
+    .split(SEGMENT_SEP)
+    .map(part => part.replace(SEGMENT_TAIL, '').trim())
+    .filter(part => part.length >= 2)
+  // 同一个方向写了两遍（「智能指针、智能指针」）不算多方向
+  const unique = Array.from(new Set(parts))
+  if (unique.length < 2 || unique.length > 6) return []
+  return unique
+}
+

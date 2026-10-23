@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.17'
+    const UI_REV = '0.3.18'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -114,6 +114,37 @@ window.__ModuleLoader__.load({
         chatSearching: '正在检索知识库…',
         chatSaving: '正在整理知识卡片…',
         chatNoHit: '这次没有命中任何知识卡片',
+        // 卡片角色（2026-10-23 用户反馈「卡片之间没有区分」）
+        roleExisting: '库中已有',
+        roleNew: '本次新增',
+        roleUpdate: '本次更新',
+        rolePreview: '待写入',
+        cardPendingNote: '还没进库',
+        cardCollapse: '收起',
+        // 相关补充：点一行能看全文（2026-10-23 用户：「点开后没有卡片，只有文字，那也没有意义」）
+        relOpenHint: '点开看全文',
+        relCloseHint: '收起这一条',
+        relNote: '相关条目 · 仅供参考，不是本轮答案',
+        relMore: '再看',
+        relLess: '收起后面的',
+        proposalHead: '提议补',
+        proposalAccept: '同意，出卡片预览',
+        proposalLater: '算了',
+        proposalGenerating: '生成中…',
+        proposalConfirm: '确认写入',
+        // 提议条里挑要补的条目、挑补到哪个主题
+        proposalTopic: '补到',
+        // 预览先行的写入条
+        saveBarTitle: '这批卡片还没进库：',
+        unitCards: '条',
+        notWritten: '（未写入）',
+        saveConfirm: '确认写入',
+        saveWriting: '写入中…',
+        saveDone: '已写入',
+        groupExisting: '库中已有',
+        groupNew: '本次新增',
+        groupUpdate: '本次更新',
+        groupPreview: '待写入',
         expandAll: '展开全部',
         collapseAll: '收起',
         actReview: 'AI 校验补充',
@@ -250,6 +281,34 @@ window.__ModuleLoader__.load({
         chatSearching: 'Searching the knowledge base…',
         chatSaving: 'Collecting knowledge cards…',
         chatNoHit: 'No knowledge card matched this time',
+        // Card roles (2026-10-23: "cards are indistinguishable")
+        roleExisting: 'In library',
+        roleNew: 'New',
+        roleUpdate: 'Updated',
+        rolePreview: 'Not saved',
+        cardPendingNote: 'not in the library yet',
+        cardCollapse: 'Collapse',
+        relOpenHint: 'Open the full text',
+        relCloseHint: 'Collapse this one',
+        relNote: 'Related · background only, not the answer',
+        relMore: 'Show',
+        relLess: 'Hide the rest',
+        proposalHead: 'Suggested additions',
+        proposalAccept: 'Generate preview',
+        proposalLater: 'No thanks',
+        proposalGenerating: 'Generating…',
+        proposalConfirm: 'Write',
+        proposalTopic: 'Add to',
+        saveBarTitle: 'These cards are not in the library yet:',
+        unitCards: 'cards',
+        notWritten: '(not written)',
+        saveConfirm: 'Write them',
+        saveWriting: 'Writing…',
+        saveDone: 'Written',
+        groupExisting: 'In library',
+        groupNew: 'New',
+        groupUpdate: 'Updated',
+        groupPreview: 'Not saved',
         expandAll: 'Expand all',
         collapseAll: 'Collapse',
         actReview: 'AI review',
@@ -451,12 +510,59 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
 .kb-stack-head{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary);opacity:.9;padding:0 2px}
 .kb-turn{margin:6px 0 2px}
 .kb-turn-head{display:flex;align-items:center;gap:8px;padding:0 2px 2px}
+/* 展开/收起放在卡片下方：用户是看完这几张才决定要不要展开的。 */
+.kb-turn-foot{display:flex;justify-content:flex-end;padding:0 2px}
+.kb-turn-foot .kb-mini{font-size:11.5px;padding:1px 9px}
 .kb-turn-head .kb-mini{margin-left:auto}
 .kb-related{display:flex;flex-direction:column;gap:8px;margin-top:2px;padding-top:6px;border-top:1px dashed var(--kb-line)}
 .kb-related-head{display:flex;align-items:center;gap:6px;width:100%;font:inherit;font-size:11px;letter-spacing:.03em;color:var(--dsw-alias-label-secondary);background:transparent;border:0;border-radius:6px;padding:3px 2px;cursor:pointer;text-align:left}
 .kb-related-head:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2)}
 .kb-related-caret{font-size:9px;opacity:.75;width:9px;flex:none}
 .kb-related .kb-chat-card{opacity:.82}
+/* 收起态的一行预览（2026-10-23 用户：末尾卡片太大，做小当预览，点击/悬停查看） */
+.kb-chat-card.kb-mini-card{display:flex;flex-direction:column;gap:2px;min-width:0;padding:5px 9px 5px 12px;cursor:pointer}
+.kb-chat-card.kb-mini-card::before{top:6px;bottom:6px;opacity:.75}
+.kb-chat-card.kb-mini-card:hover{background:color-mix(in srgb,var(--kb-role-c) 9%,var(--kb-card))}
+.kb-mini-line{display:flex;align-items:baseline;gap:7px;min-width:0}
+.kb-mini-title{flex:1 1 auto;min-width:0;font-size:12.5px;font-weight:640;white-space:normal;overflow-wrap:anywhere;line-height:1.45}
+.kb-mini-meta-line{font-size:11px;color:var(--dsw-alias-label-secondary)}
+.kb-mini-sum{flex:1 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kb-mini-meta{flex:none;font-size:10.5px;opacity:.7;white-space:nowrap}
+/* 提议条 */
+.kb-proposal{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding:9px 11px;border:1px solid color-mix(in srgb,var(--kb-accent) 42%,transparent);border-radius:9px;background:color-mix(in srgb,var(--kb-accent) 8%,transparent)}
+.kb-proposal-head{display:flex;align-items:baseline;gap:8px;font-size:12px;font-weight:650;color:var(--dsw-alias-label-primary)}
+.kb-proposal-topic{font-size:11px;font-weight:400;color:var(--dsw-alias-label-secondary)}
+.kb-proposal-list{display:flex;flex-direction:column;gap:2px}
+.kb-proposal-item{display:flex;align-items:baseline;gap:8px;font-size:11.5px;min-width:0}
+.kb-proposal-item input[type=checkbox]{flex:none;margin:0;transform:translateY(1px)}
+.kb-proposal-topicrow{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11.5px}
+.kb-proposal-select{font-size:11.5px;padding:2px 6px;border-radius:6px;border:1px solid var(--kb-line);background:var(--kb-card);color:var(--dsw-alias-label-primary);max-width:240px}
+.kb-proposal-title{flex:none;font-weight:600;color:var(--dsw-alias-label-primary)}
+.kb-proposal-why{flex:1 1 auto;min-width:0;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-proposal-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.kb-proposal-preview{display:flex;flex-direction:column;gap:6px;max-height:340px;overflow:auto}
+.kb-proposal-card{border:1px solid var(--kb-line);border-radius:7px;padding:7px 9px;background:var(--kb-card)}
+.kb-proposal-card-title{font-size:12px;font-weight:650;margin-bottom:3px}
+.kb-proposal-done{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 40%,transparent);font-size:12px;color:var(--dsw-alias-state-success-primary)}
+
+/* 相关补充：一行元信息 + 点开就地看全文（2026-10-23 两轮反馈合并）
+   ① 展开后和命中卡长得一模一样，用户分不清哪张是答案 → 不再用完整卡片外壳，保持浅色小行；
+   ② 用户又说「点开后没有卡片，只有文字，那也没有意义」→ 行本身可点，点开在下面直接铺正文。 */
+.kb-rel-list{display:flex;flex-direction:column;gap:1px;padding:2px 0 0}
+.kb-rel-item{min-width:0}
+.kb-rel-row{display:flex;align-items:baseline;gap:6px;min-width:0;width:100%;font:inherit;font-size:11.5px;line-height:1.6;padding:1px 4px;border:0;border-radius:4px;background:transparent;color:inherit;text-align:left;cursor:pointer}
+.kb-rel-row:hover{background:var(--kb-field)}
+.kb-rel-row[aria-expanded="true"]{background:var(--kb-field)}
+.kb-rel-caret{flex:none;font-size:9px;opacity:.7;width:9px}
+.kb-rel-title{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}
+.kb-rel-row[aria-expanded="true"] .kb-rel-title{color:var(--dsw-alias-label-primary);font-weight:600}
+.kb-rel-meta{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);opacity:.65;white-space:nowrap}
+.kb-rel-open{margin:2px 0 5px 15px;padding:6px 9px;border-left:2px solid var(--kb-line);border-radius:0 6px 6px 0;background:var(--kb-card);font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
+.kb-rel-note{font-size:10.5px;letter-spacing:.03em;opacity:.6;margin-bottom:3px}
+.kb-rel-open .kb-blocks>.kb-p:first-child{font-size:12px;font-weight:600;margin:0 0 5px;color:var(--dsw-alias-label-primary)}
+.kb-rel-foot{display:flex;align-items:baseline;gap:6px;margin-top:5px;font-size:10.5px;opacity:.65}
+.kb-rel-more{margin:3px 0 0 15px;padding:1px 6px;border:0;border-radius:4px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:10.5px;cursor:pointer;text-align:left}
+.kb-rel-more:hover{background:var(--kb-field);color:var(--dsw-alias-label-primary)}
 .kb-chat-card{position:relative;border:1px solid var(--kb-line);border-radius:9px;padding:9px 11px 9px 14px;background:var(--kb-card)}
 .kb-chat-card::before{content:'';position:absolute;left:0;top:10px;bottom:10px;width:2px;border-radius:0 2px 2px 0;background:var(--kb-tc,var(--kb-accent));opacity:.55}
 .kb-chat-head{display:flex;align-items:center;gap:6px;min-width:0}
@@ -466,6 +572,24 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
 .kb-chat-body .kb-blocks>.kb-p:first-child{font-size:12.5px;font-weight:600;margin:0 0 6px}
 .kb-chat-body .kb-li-text{line-height:1.6}
 .kb-chat-foot{display:flex;align-items:center;gap:6px;margin-top:7px;flex-wrap:wrap}
+/* 卡片角色（2026-10-23 用户反馈「卡片之间没有区分」）
+   以前左侧色条一律用主题色：同一个主题里所有卡片一个颜色，
+   「库中已有的」和「这次要加的」看起来完全一样。现在色条和徽章按角色取色。 */
+.kb-role-badge{flex:none;font-size:10px;line-height:1.5;padding:0 7px;border-radius:999px;border:1px solid var(--kb-role-c,#3b82f6);color:var(--kb-role-c,#3b82f6);background:color-mix(in srgb,var(--kb-role-c,#3b82f6) 14%,transparent);white-space:nowrap;font-weight:600;letter-spacing:.02em}
+.kb-chat-card.kb-role-preview{border-style:dashed;background:transparent}
+.kb-chat-card.kb-role-preview::before{opacity:.8}
+/* 回答下方的分组：库中已有 / 本次新增 / 本次更新，各一组不混排 */
+.kb-group{display:flex;flex-direction:column;gap:8px}
+.kb-group+.kb-group{margin-top:2px;padding-top:6px;border-top:1px dashed var(--kb-line)}
+.kb-group-head{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary);opacity:.9;padding:0 2px}
+/* 预览先行的写入条：卡片底下那一个「确认写入 N 条」 */
+.kb-save-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--kb-accent) 40%,transparent);border-radius:9px;background:color-mix(in srgb,var(--kb-accent) 10%,transparent)}
+.kb-save-bar-text{font-size:12px;color:var(--dsw-alias-label-primary)}
+.kb-save-bar-text b{font-weight:650}
+.kb-save-bar-topic{font-size:11.5px;color:var(--dsw-alias-label-secondary);opacity:.9}
+.kb-save-err{font-size:11.5px;color:var(--dsw-alias-state-warn-primary);flex:1 1 100%;min-width:0}
+.kb-save-ok{font-size:12px;color:var(--dsw-alias-state-success-primary);font-weight:600}
+.kb-save-bar .kb-vbtn{height:28px;font-size:12.5px}
 .kb-badge.ok{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary)}
 .kb-badge.clickable{cursor:pointer;font-family:inherit}
 .kb-badge.clickable:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-l2)}
@@ -662,7 +786,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         const message = (json && json.error) || `HTTP ${res.status}`
         // 卡片这组接口是宿主半侧新加的：宿主没重启时它们还不存在。
         // 直接把「未知接口」甩给用户没有意义，这里说清楚要重启。
-        if (res.status === 404 && String(path).startsWith('/card/')) {
+        // /save 同理：它也是批次 2 新加的路由（预览先行的「确认写入」）。
+        if (res.status === 404 && (String(path).startsWith('/card/') || String(path) === '/save')) {
           throw new Error('这个功能要重启 DSH 之后才生效（宿主半侧还没重新加载）')
         }
         throw new Error(message)
@@ -709,6 +834,26 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       let h = 0
       for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
       return TOPIC_COLORS[h % TOPIC_COLORS.length]
+    }
+
+    // ---------------------------------------------------------------- 卡片角色
+    // 2026-10-23 用户反馈「卡片之间没有区分」：同一主题里所有卡片一个颜色，
+    // 「库中已有的」和「这次要加的」看起来完全一样，用户不知道哪些已经进库了。
+    // 现在卡片带一个 role，色条和徽章按角色取色，回答下方的卡片也按角色分组。
+    const CARD_ROLES = {
+      existing: { labelKey: 'roleExisting', groupKey: 'groupExisting', color: '#3b82f6' },
+      new: { labelKey: 'roleNew', groupKey: 'groupNew', color: '#10b981' },
+      update: { labelKey: 'roleUpdate', groupKey: 'groupUpdate', color: '#f59e0b' },
+      preview: { labelKey: 'rolePreview', groupKey: 'groupPreview', color: '#94a3b8' },
+    }
+
+    /** 分组顺序：待写入的排前面（那是用户马上要决定的事），库中已有的排后面。 */
+    const ROLE_ORDER = ['new', 'update', 'preview', 'existing']
+
+    /** 卡片的角色；宿主没给就当「库中已有」（检索命中、清单列出都是它）。 */
+    function roleOf(card) {
+      const role = card && card.role
+      return role && CARD_ROLES[role] ? role : 'existing'
     }
 
     function Badge(props) {
@@ -1105,7 +1250,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           { className: 'kb-card-foot' },
           typeof score === 'number' ? h('span', { className: 'kb-score' }, 'score ' + score) : null,
           // 版本号放左边：右下角是操作按钮浮现的位置，放右边会与「归档/删除」重合
-          h('span', { className: 'kb-score' }, shortVersion(entry.version) + (entry.updatedAt ? ' · ' + fmtTime(entry.updatedAt) : '')),
+          h('span', { className: 'kb-score' }, versionMeta(entry.version, entry.updatedAt, true)),
           h('span', { className: 'kb-grow' }),
         ),
         h(
@@ -1235,7 +1380,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             h(
               'span',
               { className: 'kb-modal-meta' },
-              (entry.topicName || entry.topic || '') + ' · ' + formatVersion(entry.version) + (entry.updatedAt ? ' · ' + fmtTime(entry.updatedAt) : ''),
+              (entry.topicName || entry.topic || '') + ' · ' + versionMeta(entry.version, entry.updatedAt),
             ),
             typeof score === 'number'
               ? h(
@@ -2069,6 +2214,25 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     function isStampVersion(value) {
       const n = Number(value)
       return Number.isFinite(n) && n >= 1e12
+    }
+
+    /**
+     * 「版本 · 时间」的显示。
+     *
+     * 版本号现在是时间戳（写入那一刻），它**本身就是**「最后修改时间」——
+     * 再补一段 updatedAt 就是同一个时间显示两遍（2026-10-23 用户反馈：
+     * 「版本号既然是用时间戳，那就不要还有一块时间」）。
+     * 老数据（版本号还是 v1/v2 这种小整数）没有时间含义，才需要补 updatedAt。
+     *
+     * @param {number|string} version 版本号
+     * @param {string} [updatedAt] 条目的更新时间（ISO）
+     * @param {boolean} [short] 用短格式（卡片脚上）
+     * @returns {string}
+     */
+    function versionMeta(version, updatedAt, short = false) {
+      const stamp = short ? shortVersion(version) : formatVersion(version)
+      if (isStampVersion(Number(version))) return stamp
+      return updatedAt ? stamp + ' · ' + fmtTime(updatedAt) : stamp
     }
 
     const pad2 = (value) => String(value).padStart(2, '0')
@@ -2991,12 +3155,37 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       )
     }
 
-    /** 会话里的一张知识卡片：正文 + 三个动作 + 就地展开的工作台/追问/核实。 */
+    /** 正文首行：收起态当摘要用（卡片正文契约：首行就是结论）。 */
+    function firstLineOf(body) {
+      return (
+        String(body || '')
+          .split(/\r?\n/)
+          .map(part => part.trim())
+          .find(Boolean) || ''
+      )
+    }
+
+    /**
+     * 会话里的一张知识卡片。
+     *
+     * 2026-10-23 用户反馈「会话末尾的知识卡片太大了，可以做小当预览，可以点击或者悬停查看」：
+     * 现在默认是**一行小预览**（角色徽章 + 标题 + 正文首行 + 出处），点一下才展开成完整卡片；
+     * 收起态把正文首行挂到 title 属性上，鼠标悬停就能看到。
+     * 展开后才是正文 + 标签 + 三个动作（评审/编辑/问一下）—— 动作只在展开时出现，
+     * 否则收起态的卡片就不小了。
+     */
     function ChatCard(props) {
-      const { card, onSaved } = props
+      const { card, onSaved, compact = false } = props
       const [panel, setPanel] = useState('')
+      // 预览默认收起；compact=false 的调用方（面板里的卡片）保持旧行为
+      const [open, setOpen] = useState(!compact)
       // 这份快照是不是已经过期（别的端改过了）：过期就禁用会写库的按钮
       const stale = useCardStale(card)
+      // 角色：库中已有 / 本次新增 / 本次更新 / 待写入。
+      // 用户 2026-10-23 反馈「卡片之间没有区分」—— 同一主题里所有卡片同色，
+      // 用户分不清哪些已经在库里、哪些是这次新加的。
+      const role = roleOf(card)
+      const roleMeta = CARD_ROLES[role]
 
       const update = (patch) => {
         // 自己刚写回过：库里版本就是新的，别再把它当成过期卡
@@ -3004,17 +3193,72 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         if (onSaved) onSaved(patch)
       }
 
+      const summary = firstLineOf(card.body)
+      const metaBits = [card.topicName, card.appliesTo, card.source?.locator].filter(Boolean)
+
+      if (!open) {
+        // 悬停要把**整段正文**给出来（原生 tooltip 认换行），不只是首行 ——
+        // 2026-10-23 用户反馈「悬停也没有把正文所有内容显示出来」。
+        const hover = String(card.body || '').trim() || card.title
+        return h(
+          'div',
+          {
+            className: 'kb-chat-card kb-mini-card kb-role-' + role,
+            style: { '--kb-tc': topicColor(card.topic), '--kb-role-c': roleMeta.color },
+            onClick: () => setOpen(true),
+            role: 'button',
+            tabIndex: 0,
+            title: hover,
+          },
+          // 标题单独一行、**完整显示不截断**（长标题换行，最多两行）——
+          // 2026-10-23 用户反馈「标题占一行，至少标题要完整吧」。
+          h(
+            'div',
+            { className: 'kb-mini-line' },
+            h('span', { className: 'kb-role-badge' }, translate(roleMeta.labelKey)),
+            h('span', { className: 'kb-mini-title' }, card.title),
+          ),
+          summary || metaBits.length
+            ? h(
+                'div',
+                { className: 'kb-mini-line kb-mini-meta-line' },
+                summary ? h('span', { className: 'kb-mini-sum' }, summary) : null,
+                metaBits.length ? h('span', { className: 'kb-mini-meta' }, metaBits.join(' · ')) : null,
+              )
+            : null,
+        )
+      }
+
+      // 点卡片任意位置就收起（2026-10-23 用户要求：不要非得点按钮才能缩）。
+      // 按钮 / 输入框 / 链接上不触发，选中文字时也不触发 —— 否则用户点「编辑」或复制正文时卡片会莫名其妙缩回去。
+      const collapseOnClick = (event) => {
+        const target = event && event.target
+        if (target && typeof target.closest === 'function' && target.closest('button, a, textarea, input, select')) return
+        try {
+          const selection = typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null
+          if (selection && String(selection).length) return
+        } catch {
+          /* 拿不到选择状态就算了 */
+        }
+        setOpen(false)
+      }
+
       return h(
         'article',
-        { className: 'kb-chat-card', style: { '--kb-tc': topicColor(card.topic) } },
+        {
+          className: 'kb-chat-card kb-role-' + role,
+          style: { '--kb-tc': topicColor(card.topic), '--kb-role-c': roleMeta.color },
+        },
         h(
           'div',
-          { className: 'kb-chat-head' },
+          { className: 'kb-chat-head', onClick: collapseOnClick, title: translate('cardCollapse') },
+          h('span', { className: 'kb-role-badge' }, translate(roleMeta.labelKey)),
           h('span', { className: 'kb-chat-title' }, card.title),
           card.topicName ? h('span', { className: 'kb-chat-topic' }, card.topicName) : null,
-          h(VerifyBadge, { card, onToggle: () => setPanel(panel === 'verify' ? '' : 'verify') }),
+          // 还没落盘的卡片没有可核实的对象：徽章点开会去写一条不存在的条目
+          card.id ? h(VerifyBadge, { card, onToggle: () => setPanel(panel === 'verify' ? '' : 'verify') }) : null,
         ),
-        h('div', { className: 'kb-chat-body' }, h(BodyBlocks, { body: card.body })),
+        h('div', { className: 'kb-chat-body', onClick: collapseOnClick }, h(BodyBlocks, { body: card.body })),
         card.tags && card.tags.length
           ? h(
               'div',
@@ -3035,6 +3279,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
               )
             : null,
           h('span', { className: 'kb-grow' }),
+          // 展开态给一个「收起」：用户看完正文要能收回去，否则卡片越滚越长
           // 没有 id 的卡片是「还没落盘」的预览：没有可操作的对象，就不给动作
           card.id
             ? h(
@@ -3062,7 +3307,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 ),
                 h('button', { className: 'kb-mini', onClick: () => setPanel(panel === 'ask' ? '' : 'ask') }, translate('actAsk')),
               )
-            : h('span', { className: 'kb-work-note' }, translate('chatSaving')),
+            : h('span', { className: 'kb-work-note' }, translate('cardPendingNote')),
         ),
         panel === 'work' ? h(Workbench, { card, autoReview: true, onClose: () => setPanel(''), onSaved: update }) : null,
         panel === 'edit' ? h(Workbench, { card, autoReview: false, onClose: () => setPanel(''), onSaved: update }) : null,
@@ -3087,6 +3332,12 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
 
     /** 稳定的空数组：没命中时返回同一个引用，避免无意义重渲染。 */
     const EMPTY_CARDS = Object.freeze([])
+    /** 相关补充里被点开的行（同样是稳定空引用）。 */
+    const EMPTY_OPEN_REL = Object.freeze([])
+    /** 相关补充先摆几行；超出的折成「再看 N 条」（条数本身不设上限）。 */
+    const RELATED_VISIBLE = 12
+    /** 稳定的空分组数组（同上，避免每次重算新引用）。 */
+    const EMPTY_GROUPS = Object.freeze([])
 
     /** 我们的 Turn Definition 在「这一轮」上占的 key。 */
     const KB_TURN_KIND = 'kb-cards'
@@ -3120,16 +3371,33 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         const related = meta && Array.isArray(meta.kbRelated) ? meta.kbRelated : null
         // 检索重排的 token 用量：跟命中卡片同一次检索的结果
         const tokens = meta && meta.kbTokens && typeof meta.kbTokens === 'object' ? meta.kbTokens : null
+        // 待写入批次：learn_save 预览时给的 batchId，界面拿它渲染「确认写入 N 条」
+        const save = meta && meta.kbSave && typeof meta.kbSave === 'object' ? meta.kbSave : null
+        // 卡片来源：search=检索命中 / entries=清单列出 / save=写入。
+        // 把「列出来的 251 条」说成「命中 251 条」是骗人（2026-10-23 用户实测）。
+        const source = meta && typeof meta.kbCardSource === 'string' ? meta.kbCardSource : ''
+        // 提议补条目：learn_propose 发布的提议条（标题 + 理由，正文等用户点同意再生成）
+        const proposal = meta && meta.kbProposal && typeof meta.kbProposal === 'object' ? meta.kbProposal : null
         // 命中和相关补充是一起发布的（同一次 learn_search 的重排结果），
         // 所以只要有任意一组就记一条 entry。
         const hasCards = cards && cards.length > 0
         const hasRelated = related && related.length > 0
-        if (!hasCards && !hasRelated) return state
+        const hasSave = save && save.batchId
+        const hasProposal = proposal && proposal.id
+        if (!hasCards && !hasRelated && !hasSave && !hasProposal) return state
         return {
           ...state,
           entries: [
             ...state.entries,
-            { seq: event.seq, cards: hasCards ? cards : EMPTY_CARDS, related: hasRelated ? related : EMPTY_CARDS, tokens },
+            {
+              seq: event.seq,
+              cards: hasCards ? cards : EMPTY_CARDS,
+              related: hasRelated ? related : EMPTY_CARDS,
+              tokens,
+              save: hasSave ? save : null,
+              source,
+              proposal: hasProposal ? proposal : null,
+            },
           ],
         }
       },
@@ -3143,11 +3411,60 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     }
 
     /** 稳定的空 payload：没命中时返回同一个引用。 */
-    const EMPTY_PAYLOAD = Object.freeze({ cards: EMPTY_CARDS, related: EMPTY_CARDS, rerankTokens: 0 })
+    const EMPTY_PAYLOAD = Object.freeze({ cards: EMPTY_CARDS, related: EMPTY_CARDS, rerankTokens: 0, groups: EMPTY_GROUPS, save: null, source: '', proposal: null })
+
+    /** 按角色分组：库中已有 / 本次新增 / 本次更新 / 待写入，各一组不混排。 */
+    function groupCards(cards) {
+      const buckets = new Map()
+      for (const card of cards || []) {
+        const role = roleOf(card)
+        if (!buckets.has(role)) buckets.set(role, [])
+        buckets.get(role).push(card)
+      }
+      const groups = []
+      for (const role of ROLE_ORDER) {
+        const list = buckets.get(role)
+        if (list && list.length) groups.push({ role, cards: list })
+      }
+      return groups
+    }
+
+    /**
+     * 同一张卡片在界面上只留一次。
+     *
+     * 为什么会重复：这一轮的卡片是把**所有工具调用**的卡片拼起来的。
+     * 模型按方向检索四次，同一条「vector 与 list 的区别」可能同时沾「STL」「容器」被命中几次；
+     * learn_search 和 learn_entries 也可能把同一条都带回来。
+     * 卡片是按 id 存的，同一个 id 出现多次就是同一张卡（2026-10-23 用户实测：
+     * 「选中卡片出现了同一张卡片多次被命中」）。
+     *
+     * 去重键带上 role：库中已有（existing）和本次新增（new/update）是两种投影，
+     * 同一张卡同时出现在两组里是有意义的，不能互相吃掉。
+     */
+    function cardKey(card) {
+      if (!card) return ''
+      const id = card.id ? String(card.id) : ''
+      return roleOf(card) + ':' + (id || String(card.title || '') + '|' + String(card.topic || ''))
+    }
+
+    /** 按序去重，保留第一次出现的那张（先出现的来自更早的工具调用）。 */
+    function uniqueCards(list) {
+      const seen = new Set()
+      const out = []
+      for (const card of list || []) {
+        const key = cardKey(card)
+        if (!key || seen.has(key)) continue
+        seen.add(key)
+        out.push(card)
+      }
+      return out
+    }
 
     /**
      * 从这一轮的 Turn Definition 数据里取卡片，按 turn 结束位置截断。
-     * 返回 { cards, related } 两组：命中在前，相关补充在后（界面里折叠）。
+     * 返回 { cards, related, groups, save, source }：命中按角色分组，相关补充另算（界面里折叠），
+     * save 是待写入批次（有它才渲染「确认写入 N 条」按钮），
+     * source 是卡片来源（search=检索命中 / entries=清单列出 / save=写入）。
      */
     function turnPayloadOf(props) {
       try {
@@ -3156,19 +3473,35 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         const data = turn.data.get(KB_TURN_KIND)
         if (!data || !Array.isArray(data.entries) || data.entries.length === 0) return EMPTY_PAYLOAD
         const bound = turn.end && typeof turn.end.seq === 'number' ? turn.end.seq : seq
-        const cards = []
-        const related = []
-        let rerankTokens = 0
+        const collected = []
         for (const entry of data.entries) {
           if (!entry) continue
           if (typeof bound === 'number' && typeof entry.seq === 'number' && entry.seq > bound) continue
-          if (Array.isArray(entry.cards)) for (const card of entry.cards) cards.push(card)
-          if (Array.isArray(entry.related)) for (const card of entry.related) related.push(card)
+          collected.push(entry)
+        }
+        const cards = uniqueCards(collected.flatMap(entry => (Array.isArray(entry.cards) ? entry.cards : [])))
+        // 已经是命中的卡片不再当「相关补充」重复列一遍
+        const hitKeys = new Set(cards.map(cardKey))
+        const related = uniqueCards(
+          collected.flatMap(entry => (Array.isArray(entry.related) ? entry.related : [])),
+        ).filter(card => !hitKeys.has(cardKey(card)))
+        let rerankTokens = 0
+        let save = null
+        let proposal = null
+        const sources = new Set()
+        for (const entry of collected) {
+          // 同一轮里多次 learn_save：取最后一次的待写入批次
+          if (entry.save && entry.save.batchId) save = entry.save
+          // 同一轮里多次 learn_propose：取最后一次的提议
+          if (entry.proposal && entry.proposal.id) proposal = entry.proposal
+          if (entry.source) sources.add(entry.source)
           const spent = entry.tokens && entry.tokens.rerank ? Number(entry.tokens.rerank.totalTokens) : 0
           if (Number.isFinite(spent) && spent > 0) rerankTokens += spent
         }
-        if (cards.length === 0 && related.length === 0) return EMPTY_PAYLOAD
-        return { cards, related, rerankTokens }
+        if (cards.length === 0 && related.length === 0 && !save && !proposal) return EMPTY_PAYLOAD
+        // 只有一种来源时才敢用它的说法；混着来就笼统说「知识库卡片」
+        const source = sources.size === 1 ? Array.from(sources)[0] : sources.size > 1 ? 'mixed' : ''
+        return { cards, related, rerankTokens, groups: groupCards(cards), save, source, proposal }
       } catch {
         // 宿主内部结构变了就安静地不渲染，绝不能把会话搞坏
         return EMPTY_PAYLOAD
@@ -3181,42 +3514,273 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     }
 
     /**
-     * 回答下方那一排：命中卡片列出来，相关补充排在后面并默认收缩。
+     * 回答下方那一排：卡片按角色分组列出来，相关补充排在后面并默认收缩。
      *
      * 收缩而不是不显示：这些条目是模型判定的"同领域但不是答案"，用户可能想看，
      * 但默认展开会把真正的答案挤下去 —— 所以给一行可以点的标题。
+     *
+     * 分组而不是一锅端：2026-10-23 用户反馈「卡片之间没有区分」。
+     * 以前这一轮里所有工具的卡片被拍平进同一个数组（turnPayloadOf），
+     * 「库中已有的 34 条」和「这次要加的 3 条」混在一起，用户分不清。
+     * 现在按 role 分组：库中已有 / 本次新增 / 本次更新 / 待写入。
      */
     function TurnTailCards(props) {
       const [all, setAll] = useState(false)
       const [showRelated, setShowRelated] = useState(false)
-      const { cards, related, rerankTokens } = turnPayloadOf(props)
-      if (cards.length === 0 && related.length === 0) return null
-      const shown = all ? cards : cards.slice(0, 3)
+      // 相关补充里，哪几行被点开了（键 = rel-<id|index>）。单独记，不跟折叠状态混。
+      const [openRel, setOpenRel] = useState(EMPTY_OPEN_REL)
+      // 相关补充超过 RELATED_VISIBLE 条时才用得上：false = 只摆前 12 条
+      const [showAllRel, setShowAllRel] = useState(false)
+      const { cards, related, rerankTokens, groups, save, source, proposal } = turnPayloadOf(props)
+      // 待写入批次的落盘状态：点「确认写入」之后要能看出成没成
+      const [saveState, setSaveState] = useState({ busy: false, done: false, error: '' })
+      if (cards.length === 0 && related.length === 0 && !save && !proposal) return null
+
       const headBits = []
-      if (cards.length) headBits.push('知识库命中 ' + cards.length + ' 条')
+      // 计数要说实话：检索命中叫「命中」，清单列出来的叫「列出」——
+      // 把「列出来的 251 条」说成「命中 251 条」是骗人（2026-10-23 用户实测）。
+      const countLabel = source === 'entries' ? '列出 ' : source === 'search' ? '知识库命中 ' : ''
+      if (groups.length > 1) headBits.push('知识库卡片 ' + cards.length + ' 张')
+      else if (groups.length === 1 && groups[0].role === 'existing') {
+        headBits.push((countLabel || '知识库命中 ') + cards.length + ' 条')
+      } else if (groups.length === 1) headBits.push(translate(CARD_ROLES[groups[0].role].groupKey) + ' ' + cards.length + ' ' + translate('unitCards'))
       if (related.length) headBits.push('相关 ' + related.length + ' 条')
       if (rerankTokens > 0) headBits.push('重排 ' + formatTokens(rerankTokens) + ' tokens')
+
+      const writeNow = async () => {
+        if (!save || !save.batchId) return
+        setSaveState({ busy: true, done: false, error: '' })
+        try {
+          await apiPost('/save', { batchId: save.batchId })
+          setSaveState({ busy: false, done: true, error: '' })
+        } catch (error) {
+          const message = error && error.message ? String(error.message) : String(error)
+          setSaveState({ busy: false, done: false, error: message })
+        }
+      }
+
+      // 提议条的状态：idle → 生成中 → 预览卡片（含 batchId）→ 已写入 / 放弃
+      // 2026-10-23 用户定方案 A：点「同意」由宿主调插件模型写正文，不再让模型跑一趟。
+      const [propState, setPropState] = useState({ busy: false, cards: [], batchId: '', error: '', done: false })
+      // 选哪些条目要补 + 补到哪个主题（2026-10-23 用户要求）：
+      // 「提醒补多条条目后，我只想补其中几条」「加入到哪个主题也要可以选」
+      const [propPicked, setPropPicked] = useState({})
+      const [propTopic, setPropTopic] = useState('')
+
+      const proposalItems = (proposal && proposal.items) || []
+      const proposalId = proposal && proposal.id
+      // 提议换了（新的一轮）就把选择重置成「全选 + 提议自己的主题」
+      const propKey = proposalId || ''
+      const [propSeenKey, setPropSeenKey] = useState('')
+      if (propKey !== propSeenKey) {
+        setPropSeenKey(propKey)
+        setPropPicked({})
+        setPropTopic((proposal && proposal.topic) || '')
+      }
+      const pickedIndexes = proposalItems
+        .map((item, index) => ({ item, index }))
+        .filter(({ item, index }) => (propPicked[index] === undefined ? true : !!propPicked[index]))
+        .map(({ index }) => index)
+      // 下拉里选中的主题名（头部要显示「→ 主题名」）
+      const propTopicLabel =
+        ((proposal && proposal.topics) || []).find(topic => topic.slug === propTopic)?.name || ''
+
+      const togglePick = index => {
+        setPropPicked(state => ({ ...state, [index]: !(state[index] === undefined ? true : state[index]) }))
+      }
+
+      const acceptProposal = async () => {
+        if (!proposal || !proposal.id) return
+        if (!pickedIndexes.length) {
+          setPropState({ busy: false, cards: [], batchId: '', error: '至少要选一条要补的条目', done: false })
+          return
+        }
+        setPropState({ busy: true, cards: [], batchId: '', error: '', done: false })
+        try {
+          const data = await apiPost('/propose/accept', {
+            proposalId: proposal.id,
+            items: pickedIndexes,
+            topic: propTopic || undefined,
+          })
+          setPropState({ busy: false, cards: data.cards || [], batchId: data.batchId || '', error: '', done: false })
+        } catch (error) {
+          const message = error && error.message ? String(error.message) : String(error)
+          setPropState({ busy: false, cards: [], batchId: '', error: message, done: false })
+        }
+      }
+
+      const confirmProposal = async () => {
+        if (!propState.batchId) return
+        setPropState(state => ({ ...state, busy: true, error: '' }))
+        try {
+          await apiPost('/save', { batchId: propState.batchId })
+          setPropState(state => ({ ...state, busy: false, done: true, error: '' }))
+        } catch (error) {
+          const message = error && error.message ? String(error.message) : String(error)
+          setPropState(state => ({ ...state, busy: false, error: message }))
+        }
+      }
+
       return h(
         'div',
         { className: 'kb-stack kb-turn' },
         h(
           'div',
           { className: 'kb-stack-head kb-turn-head' },
-          h('span', null, headBits.join(' · ')),
-          cards.length > 3
-            ? h(
+          h('span', null, headBits.filter(Boolean).join(' · ')),
+        ),
+        groups.map(group =>
+          h(
+            'div',
+            { className: 'kb-group', key: group.role },
+            groups.length > 1
+              ? h('div', { className: 'kb-group-head' }, translate(CARD_ROLES[group.role].groupKey) + ' ' + group.cards.length + ' ' + translate('unitCards'))
+              : null,
+            (all ? group.cards : group.cards.slice(0, 3)).map((card, index) =>
+              h(ChatCard, {
+                key: (card.id || group.role) + '-' + index,
+                card,
+                // 会话末尾的卡片默认收成一行小预览，点一下才展开（2026-10-23 用户要求）
+                compact: true,
+              }),
+            ),
+          ),
+        ),
+        // 提议条：模型说「库里缺这几条」时，别让它埋在正文最后一行（用户实测看漏），
+        // 也别用 ask_user_question（那会让这一轮多一个步骤，回答被折进过程组）。
+        // 由 learn_propose 发布到 turnTail，不受过程组折叠影响。
+        proposal && !propState.done
+          ? h(
+              'div',
+              { className: 'kb-proposal' },
+              h(
+                'div',
+                { className: 'kb-proposal-head' },
+                h('span', null, translate('proposalHead') + ' ' + (proposal.items || []).length + ' ' + translate('unitCards')),
+                proposal.topicName ? h('span', { className: 'kb-proposal-topic' }, '→ ' + (propTopicLabel || proposal.topicName)) : null,
+              ),
+              h(
+                'div',
+                { className: 'kb-proposal-list' },
+                (proposal.items || []).map((item, index) =>
+                  h(
+                    'label',
+                    { className: 'kb-proposal-item', key: 'prop-' + index },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: propPicked[index] === undefined ? true : !!propPicked[index],
+                      disabled: propState.busy,
+                      onChange: () => togglePick(index),
+                    }),
+                    h('span', { className: 'kb-proposal-title' }, item.title),
+                    item.why ? h('span', { className: 'kb-proposal-why' }, item.why) : null,
+                  ),
+                ),
+              ),
+              // 补到哪个主题（2026-10-23 用户要求：加入到哪个主题也要可以选）
+              (proposal.topics || []).length
+                ? h(
+                    'div',
+                    { className: 'kb-proposal-topicrow' },
+                    h('span', { className: 'kb-proposal-topic' }, translate('proposalTopic') + '：'),
+                    h(
+                      'select',
+                      {
+                        className: 'kb-proposal-select',
+                        value: propTopic || proposal.topic || '',
+                        disabled: propState.busy,
+                        onChange: event => setPropTopic(event.target.value),
+                      },
+                      (proposal.topics || []).map(topic =>
+                        h('option', { key: topic.slug, value: topic.slug }, topic.name + '（' + topic.count + '）'),
+                      ),
+                    ),
+                  )
+                : null,
+              // 点了「同意」之后：宿主把正文写出来，这里就地渲染预览，再点「确认写入」才入库
+              propState.cards.length
+                ? h(
+                    'div',
+                    { className: 'kb-proposal-preview' },
+                    propState.cards.map((card, index) =>
+                      h(
+                        'div',
+                        { className: 'kb-proposal-card', key: 'pc-' + index },
+                        h('div', { className: 'kb-proposal-card-title' }, card.title),
+                        h(BodyBlocks, { body: String(card.body || '') }),
+                      ),
+                    ),
+                  )
+                : null,
+              h(
+                'div',
+                { className: 'kb-proposal-acts' },
+                propState.cards.length
+                  ? h(
+                      'button',
+                      { className: 'kb-vbtn primary', disabled: propState.busy, onClick: confirmProposal },
+                      translate('proposalConfirm') + ' ' + propState.cards.length + ' ' + translate('unitCards'),
+                    )
+                  : h(
+                      'button',
+                      { className: 'kb-vbtn primary', disabled: propState.busy || !pickedIndexes.length, onClick: acceptProposal },
+                      propState.busy
+                        ? translate('proposalGenerating')
+                        : translate('proposalAccept') + ' ' + pickedIndexes.length + ' ' + translate('unitCards'),
+                    ),
+                h('button', { className: 'kb-vbtn', onClick: () => setPropState({ busy: false, cards: [], batchId: '', error: '', done: true }) }, translate('proposalLater')),
+              ),
+              propState.error ? h('span', { className: 'kb-save-err' }, propState.error) : null,
+            )
+          : null,
+        proposal && propState.done
+          ? h('div', { className: 'kb-proposal kb-proposal-done' }, '✓ ' + translate('proposalHead') + ' ' + ((proposal.items || []).length) + ' ' + translate('unitCards') + ' · ' + translate('saveDone'))
+          : null,
+        // 展开/收起放在卡片下方（2026-10-23 用户反馈：按钮在卡片最上方，
+        // 应该在下面 —— 用户是看完这几张才决定要不要展开的）。
+        cards.length > 3
+          ? h(
+              'div',
+              { className: 'kb-turn-foot' },
+              h(
                 'button',
                 { className: 'kb-mini', onClick: () => setAll(!all) },
-                all ? translate('collapseAll') : translate('expandAll') + ' ' + cards.length,
-              )
-            : null,
-        ),
-        shown.map((card, index) =>
-          h(ChatCard, {
-            key: card.id || 'tc' + index,
-            card,
-          }),
-        ),
+                all
+                  ? translate('collapseAll')
+                  : translate('expandAll') + ' ' + cards.length + ' ' + translate('unitCards'),
+              ),
+            )
+          : null,
+        // 预览先行的写入条：这批卡片还没进库，用户点一下才落盘
+        save && !saveState.done
+          ? h(
+              'div',
+              { className: 'kb-save-bar' },
+              h(
+                'span',
+                { className: 'kb-save-bar-text' },
+                translate('saveBarTitle'),
+                h('b', null, ' ' + (save.count || 0) + ' '),
+                save.topicName ? h('span', { className: 'kb-save-bar-topic' }, '→ ' + save.topicName) : null,
+              ),
+              h(
+                'button',
+                { className: 'kb-vbtn primary', disabled: saveState.busy, onClick: writeNow },
+                saveState.busy
+                  ? translate('saveWriting')
+                  : translate('saveConfirm') + ' ' + (save.count || 0) + ' ' + translate('unitCards'),
+              ),
+              saveState.error ? h('span', { className: 'kb-save-err' }, saveState.error) : null,
+            )
+          : null,
+        save && saveState.done
+          ? h(
+              'div',
+              { className: 'kb-save-bar' },
+              h('span', { className: 'kb-save-ok' }, '✓ ' + translate('saveDone') + ' ' + (save.count || 0) + ' ' + translate('unitCards')),
+              save.topicName ? h('span', { className: 'kb-save-bar-topic' }, '→ ' + save.topicName) : null,
+            )
+          : null,
         related.length
           ? h(
               'div',
@@ -3231,12 +3795,81 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 h('span', { className: 'kb-related-caret' }, showRelated ? '▾' : '▸'),
                 h('span', null, '相关知识点 ' + related.length + ' 条'),
               ),
+              // 相关补充：一行一条，**点这一行就地铺开正文**。
+              // 2026-10-23 两轮反馈：先要求「别混进答案卡」，再要求「点开要看得到东西，光一行标题没意义」。
+              // 所以外壳保持浅色小行（分得清不是答案），但点开是真正文（BodyBlocks），不是只有标题。
+              // 条数不设上限（后端 related 全留），但界面先摆 RELATED_VISIBLE 条，
+              // 多出来的折成「再看 N 条」—— 一次铺 30 行会把这一轮的回答顶走。
               showRelated
-                ? related.map((card, index) =>
-                    h(ChatCard, {
-                      key: 'rel-' + (card.id || index),
-                      card,
+                ? h(
+                    'div',
+                    { className: 'kb-rel-list' },
+                    (showAllRel ? related : related.slice(0, RELATED_VISIBLE)).map((card, index) => {
+                      const key = 'rel-' + (card.id || index)
+                      const open = openRel.includes(key)
+                      return h(
+                        'div',
+                        { className: 'kb-rel-item', key },
+                        h(
+                          'button',
+                          {
+                            className: 'kb-rel-row',
+                            'aria-expanded': open ? 'true' : 'false',
+                            title: open ? translate('relCloseHint') : translate('relOpenHint'),
+                            onClick: () =>
+                              setOpenRel(list => (list.includes(key) ? list.filter(item => item !== key) : list.concat(key))),
+                          },
+                          h('span', { className: 'kb-rel-caret' }, open ? '▾' : '▸'),
+                          h('span', { className: 'kb-rel-title' }, card.title),
+                          h(
+                            'span',
+                            { className: 'kb-rel-meta' },
+                            [card.topicName, card.appliesTo, card.source?.locator].filter(Boolean).join(' · '),
+                          ),
+                        ),
+                        // 点开的主体：正文 + 标签 + 版本行。没有 id 的卡片不会走到这里（检索结果都带 id）。
+                        open
+                          ? h(
+                              'div',
+                              { className: 'kb-rel-open' },
+                              h('div', { className: 'kb-rel-note' }, translate('relNote')),
+                              h(BodyBlocks, { body: String(card.body || '') }),
+                              card.tags && card.tags.length
+                                ? h(
+                                    'div',
+                                    { className: 'kb-tags' },
+                                    card.tags.slice(0, 4).map(tag => h('span', { className: 'kb-tag', key: tag }, tag)),
+                                  )
+                                : null,
+                              h(
+                                'div',
+                                { className: 'kb-rel-foot' },
+                                h('span', null, shortVersion(card.version || 1)),
+                                card.kind === 'qa' ? h('span', null, translate('kindQa')) : null,
+                              ),
+                            )
+                          : null,
+                      )
                     }),
+                    // 条数不封顶（用户要「相关知识点不用限制数量」），但先摆 RELATED_VISIBLE 条，
+                    // 多出来的折成一行按钮 —— 一次铺几十行会把这一轮的回答顶走。
+                    related.length > RELATED_VISIBLE
+                      ? h(
+                          'button',
+                          {
+                            className: 'kb-rel-more',
+                            onClick: () => setShowAllRel(!showAllRel),
+                            'aria-expanded': showAllRel ? 'true' : 'false',
+                          },
+                          showAllRel
+                            ? translate('relLess')
+                            : translate('relMore') +
+                              ' ' +
+                              (related.length - RELATED_VISIBLE) +
+                              ' ' +
+                              translate('unitCards'),
+                        )
+                      : null,
                   )
                 : null,
             )
@@ -3308,7 +3941,30 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       // 真正的卡片交给 TurnTailCards。文案保持中性 —— 不承诺"卡片在下方"，
       // 免得哪天卡片条坏了这行字跟着说谎。
       const bits = []
-      if (list.length) bits.push('知识库命中 ' + list.length + ' 条')
+      // 工具行的文案要跟角色对上（2026-10-23 用户反馈「卡片之间没有区分」）：
+      // 检索命中的是「库中已有」，写入计划里的是「本次新增 / 本次更新」，
+      // 预览出来的还没进库。三者混成一句「卡片 N 条」等于没区分。
+      const roleCounts = new Map()
+      for (const card of list) {
+        const role = roleOf(card)
+        roleCounts.set(role, (roleCounts.get(role) || 0) + 1)
+      }
+      const status = list.find(card => card.status)?.status || null
+      const pending = status === 'preview' || status === 'need_decision'
+      const roleBits = () => {
+        for (const role of ROLE_ORDER) {
+          const n = roleCounts.get(role) || 0
+          if (!n) continue
+          const label = translate(CARD_ROLES[role].groupKey) + ' ' + n + ' ' + translate('unitCards')
+          bits.push(pending && role !== 'existing' ? label + translate('notWritten') : label)
+        }
+      }
+      if (toolName === 'learn_save' || roleCounts.size > 1) {
+        roleBits()
+      } else {
+        const label = toolName === 'learn_entries' ? '列出 ' : '知识库命中 '
+        bits.push(label + list.length + ' ' + translate('unitCards'))
+      }
       if (relatedCount) bits.push('相关 ' + relatedCount + ' 条')
       return h('div', { className: 'kb-chat-note' }, bits.join(' · '))
     }
@@ -3369,6 +4025,11 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         )
         ctx.slots.inject('tool.call.toolview', () =>
           ctx.slots.register({ name: 'tool.call.toolview', key: 'learn_save' }, ChatCards),
+        )
+        // learn_entries 也会带回卡片（「有哪些 / 清单」类问题走它），
+        // 不注册这一行，工具行就只剩默认渲染，和另外两个工具不一致。
+        ctx.slots.inject('tool.call.toolview', () =>
+          ctx.slots.register({ name: 'tool.call.toolview', key: 'learn_entries' }, ChatCards),
         )
       } catch (error) {
         if (typeof console !== 'undefined') console.warn('[learning-kb] 会话卡片注册失败：' + describeError(error))

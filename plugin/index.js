@@ -20,10 +20,10 @@
 import os from 'node:os'
 import path from 'node:path'
 
-import { createStore } from './store.js'
+import { createStore, getSaveBatch, dropSaveBatch, getProposal, dropProposal, registerSaveBatch, slugify } from './store.js'
 import { rankDocs } from './rank.js'
 import { formatBody } from './format.js'
-import { projectCard, validateBody, buildReviewPrompt, parseReviewJson, buildAskPrompt } from './card.js'
+import { projectCard, validateBody, buildReviewPrompt, parseReviewJson, buildAskPrompt, BODY_SOFT_LIMIT } from './card.js'
 import { callModel, resolveSelection, mergeUsage, setModelPreference } from './llm.js'
 
 export const name = 'learning-kb-ui'
@@ -331,6 +331,190 @@ function handleDelete(body) {
   return { ok: true, ...result }
 }
 
+/**
+ * 「同意，出卡片预览」：按 proposalId 把提议的标题写成卡片正文，落成待写入批次。
+ *
+ * 为什么要走这里而不是让模型再调一次 learn_save（2026-10-23 用户定方案 A）：
+ *   提议时只有标题 + 理由，正文等用户点头才生成 —— 提前生成就是白烧一次模型调用；
+ *   而让模型再跑一趟又会被宿主的「过程组折叠」把上面的回答吞掉。
+ *   所以：宿主用**插件自己的模型**（和校验/重排同一套 llm.js）写正文，
+ *   写完整批登记成待写入批次，界面拿 batchId 渲染预览卡片 + 「确认写入」。
+ */
+async function handleProposalAccept(body, ctx) {
+  const proposalId = String(body?.proposalId || '').trim()
+  if (!proposalId) throw httpError(400, 'proposalId 不能为空')
+  const proposal = getProposal(proposalId)
+  if (!proposal) {
+    throw httpError(404, '这条提议已经过期（30 分钟内有效），或者 DSH 重启过。让模型重新提议一次。')
+  }
+  const kb = store()
+
+  // 选哪几条要补（2026-10-23 用户要求：「提醒补多条条目后，我只想补其中几条」）
+  // body.items 是要保留的条目下标数组；不给就是全要。
+  const allItems = Array.isArray(proposal.items) ? proposal.items : []
+  let picked = allItems
+  if (Array.isArray(body?.items)) {
+    const wanted = body.items.map(value => Number(value))
+    picked = allItems.filter((_, index) => wanted.includes(index))
+    if (!picked.length) throw httpError(400, '至少要选一条要补的条目')
+  }
+
+  // 补到哪个主题（2026-10-23 用户要求：「加入到哪个主题也要可以选啊」）
+  let slug = proposal.slug
+  let topicArg = proposal.topicArg
+  let topicName = proposal.topicName
+  const topicPick = String(body?.topic || '').trim()
+  if (topicPick) {
+    const found = kb.findTopic(topicPick)
+    if (!found) throw httpError(400, `主题「${topicPick}」不存在`)
+    slug = found.slug
+    topicArg = found.slug
+    topicName = found.name || found.slug
+  }
+
+  const cards = []
+  const failures = []
+  for (const item of picked) {
+    const written = await writeCardBody(ctx, item, { ...proposal, topicName })
+    if (!written.ok) {
+      // 把模型的失败原因也带上：只说「没能写出正文」用户没法判断是模型挂了还是超时
+      failures.push(
+        item.title +
+          (written.model ? '（' + written.model + '）' : '') +
+          (written.reason ? '：' + written.reason : ''),
+      )
+      continue
+    }
+    cards.push({
+      kind: 'point',
+      title: item.title,
+      body: written.body,
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      appliesTo: item.appliesTo || null,
+      // 正文由插件模型生成 → 来源写清楚，explicitly 未核实
+      source: { type: 'model', ref: item.why ? `模型知识展开（${item.why}）` : '模型知识展开（提议补条目）' },
+      verified: false,
+    })
+  }
+  if (!cards.length) {
+    // 生成失败**不能作废提议**（2026-10-23 用户实测：模型 429 额度用完，第一次失败后
+    // 再点就报「已过期」，因为旧代码在这里 dropProposal 了）。留着它，用户换模型/充值后
+    // 直接再点一次「同意」就行。
+    throw httpError(502, explainModelFailure(failures, resolveSelection(ctx)))
+  }
+  // 指纹闸门：这批内容已经「给用户看过」了 —— 预览卡片马上就渲染出来
+  kb.markPreviewed(slug, cards)
+  const batchId = registerSaveBatch({
+    topicArg,
+    slug,
+    cards,
+    sessionId: proposal.sessionId,
+    similarCount: 0,
+    bypassDuplicate: true,
+  })
+  // 只在全部选中的条目都生成成功时才作废提议：还剩没选的条目时保留它，
+  // 用户改完选择还能再点一次（2026-10-23 用户要求「独立选补条目」）。
+  const allDone = picked.length >= allItems.length
+  if (allDone) dropProposal(proposalId)
+  return {
+    ok: true,
+    batchId,
+    topic: topicArg || slug,
+    topicName,
+    cards: cards.map(card => ({
+      title: card.title,
+      body: card.body,
+      tags: card.tags,
+      appliesTo: card.appliesTo,
+    })),
+    failed: failures,
+  }
+}
+
+/**
+ * 让模型按卡片正文契约写一条正文。
+ *
+ * 契约和 learn_save 的 body 一致：首行结论；之后每行一个要点（行首 "- "）；
+ * 参数用反引号、术语粗体、重点【】；≤400 字。写完过一遍 formatBody/validateBody，
+ * 不合格就退回全文（宁可格式差一点，也别因为格式校验把内容丢了）。
+ */
+async function writeCardBody(ctx, item, proposal) {
+  const seed = String(item.why || '').trim()
+  const prompt = [
+    '请写一条知识卡片的正文。',
+    '标题：' + item.title,
+    seed ? '为什么值得单独成条：' + seed : '',
+    proposal.topicName ? '所属主题：' + proposal.topicName : '',
+    item.appliesTo ? '适用范围：' + item.appliesTo : '',
+    '',
+    '格式要求（严格遵守）：',
+    '1. 第一行是一句结论（不要以「标题：」开头）；',
+    '2. 之后每行一个要点，行首写「- 」；',
+    '3. 参数/命令用 `反引号`，术语用 **粗体**，重点用【】；',
+    '4. 正文不超过 400 字，按信息量定长短，不删参数数字；',
+    '5. 只输出正文本身，不要解释、不要代码块围栏、不要重复标题。',
+    '6. 只写你确定的内容；不确定的地方写「待核实」，不要编造具体数字或版本号。',
+  ]
+    .filter(Boolean)
+    .join('\n')
+  try {
+    // 2026-10-23 用户实测：模型只返回了思考过程（4212 字），没有正文 ——
+    // 根因是 maxTokens=1200 全被思考吃掉了。修法三件套：
+    //   ① 预算放大（正文上限才 400 字，1200 根本不够思考型模型先想一轮）
+    //   ② 系统提示里明说「不要输出思考过程」
+    //   ③ 第一次只有思考没正文时，自动加预算重试一次（和重排同一套补救）
+    let result = await callModel(ctx, {
+      system: '你是知识卡片撰写器。只输出卡片正文，不输出任何解释或标题，不要输出思考过程。',
+      prompt,
+      maxTokens: 4000,
+      timeoutMs: 45_000,
+    })
+    if (result && !result.ok && result.noText) {
+      result = await callModel(ctx, {
+        system:
+          '你是知识卡片撰写器。只输出卡片正文，不输出任何解释或标题，不要输出思考过程。' +
+          '（上一次你只输出了思考过程、正文为空 —— 这次直接给正文。）',
+        prompt,
+        maxTokens: 9000,
+        timeoutMs: 60_000,
+      })
+    }
+    if (!result || !result.ok) {
+      return { ok: false, reason: (result && result.reason) || '模型不可用', model: (result && result.model) || '' }
+    }
+    const raw = String(result.text || '').trim()
+    if (!raw) return { ok: false, reason: '模型没有返回内容' }
+    const formatted = formatBody(raw) ?? raw
+    return { ok: true, body: formatted.slice(0, BODY_SOFT_LIMIT), usage: result.usage || null }
+  } catch (error) {
+    return { ok: false, reason: error && error.message ? error.message : String(error) }
+  }
+}
+
+/**
+ * 把模型失败的原因翻译成用户能动手的话。
+ *
+ * 2026-10-23 用户实测：点「同意」报的是一整串 JSON（429 rate_limit_error），
+ * 用户看不出这是「额度用完了」，更不知道该去哪儿换模型。
+ */
+function explainModelFailure(failures, selection) {
+  const detail = (failures || []).join('、') || '未知原因'
+  const lower = detail.toLowerCase()
+  const used = selection && selection.model ? selection.model : ''
+  // 2026-10-23 用户实测：会话模型是 DeepSeek，插件却用了 MiniMax —— 因为设置里存着
+  // 「固定模型」。所以这里必须说清「用的是哪个、从哪来的」，否则用户会以为跟随坏了。
+  const sourceLabel =
+    selection && selection.source === 'plugin' ? '插件固定' : selection && selection.source === 'session' ? '跟随会话' : '默认兜底'
+  const who = used ? '（当前用的是 ' + used + '，来源：' + sourceLabel + '）' : ''
+  if (lower.includes('429') || lower.includes('rate_limit') || lower.includes('用量上限') || lower.includes('quota')) {
+    return (
+      '模型额度用完了（429）：' + detail + who +
+      '。可以在侧边栏「学习知识库」面板顶部把「模型」换成「跟随会话」或还有额度的那个（或等额度恢复），再点一次「同意」—— 提议没有被作废，可以直接重试。'
+    )
+  }
+  return '模型没能写出卡片正文（' + detail + '）。提议还留着，可以再点一次「同意」重试。'
+}
+
 function handleAdd(body) {
   const topic = String(body.topic || '').trim()
   if (!topic) throw new Error('缺少主题：手动录入必须先指定主题')
@@ -353,8 +537,66 @@ function handleAdd(body) {
   return { ok: true, ...result }
 }
 
-const UPDATABLE = ['title', 'body', 'q', 'tags', 'kind', 'appliesTo', 'verified']
+/**
+ * 「确认写入」按钮的落盘接口（先预览再写的第二步）。
+ *
+ * 2026-10-23 用户反馈：「直接问我要权限写入，不会先给我预览卡片效果和内容」。
+ * 改法：learn_save 默认只预览（宿主登记一个待写入批次，给界面一个 batchId），
+ * 界面上预览卡片底部出现「确认写入 N 条」按钮，用户点它 → 这个接口落盘。
+ * 不用模型再跑一趟，用户也不必再点一次宿主确认框。
+ *
+ * 三道闸（都不能省）：
+ *   · batchId 必须存在且没过期（30 分钟；DSH 重启后内存批次就没了）
+ *   · 指纹闸门：这批内容必须真的预览过（store.hasPreviewed）
+ *   · 主题一致 + 疑似重复不替他裁决
+ */
+function handleSaveBatch(body) {
+  const batchId = String(body?.batchId || '').trim()
+  if (!batchId) throw httpError(400, 'batchId 不能为空')
+  const batch = getSaveBatch(batchId)
+  if (!batch) {
+    throw httpError(404, '这批预览已经过期（30 分钟内有效），或者 DSH 重启过。让模型重新出一遍预览即可。')
+  }
+  const kb = store()
+  if (!kb.hasPreviewed(batch.slug, batch.cards)) {
+    throw httpError(400, '这批内容还没有预览过，不能直接写入。')
+  }
+  // 主题必须还是预览时那一个：会话换了主题就写错地方了
+  const targetSlug = batch.topicArg
+    ? kb.findTopic(batch.topicArg)?.slug ?? slugify(batch.topicArg)
+    : kb.currentTopic(batch.sessionId)
+  if (targetSlug !== batch.slug) {
+    throw httpError(409, `预览时的主题是「${batch.slug}」，现在是「${targetSlug || '未绑定'}」，这次没有写入。`)
+  }
+  // 疑似重复是「补充原条目 还是 仍然新增」的二选一，不让按钮替用户裁决
+  if ((batch.similarCount || 0) > 0 && !batch.bypassDuplicate) {
+    throw httpError(409, '这批和库里的条目高度相似，先请用户裁决：补充原条目（learn_update）还是仍然新增（bypassDuplicate=true）。')
+  }
+  const result = kb.planSave({
+    topic: batch.topicArg || undefined,
+    cards: batch.cards,
+    sessionId: batch.sessionId,
+    dryRun: false,
+  })
+  dropSaveBatch(batchId)
+  return {
+    ok: true,
+    status: 'written',
+    topic: result.topic,
+    total: result.total,
+    plan: result.plan,
+    message: `已写入主题「${result.topic}」，该主题现有 ${result.total} 条。`,
+  }
+}
 
+/** 带 HTTP 状态码的错误：handler 会照它回状态码。 */
+function httpError(status, message) {
+  const error = new Error(message)
+  error.status = status
+  return error
+}
+
+const UPDATABLE = ['title', 'body', 'q', 'tags', 'kind', 'appliesTo', 'verified']
 function handleUpdate(body) {
   const raw = body.fields && typeof body.fields === 'object' ? body.fields : body
   const fields = {}
@@ -757,6 +999,8 @@ const POST_ROUTES = {
   '/delete': handleDelete,
   '/add': handleAdd,
   '/update': handleUpdate,
+  '/save': handleSaveBatch,
+  '/propose/accept': (body, ctx) => handleProposalAccept(body, ctx),
   '/card/review': (body, ctx) => handleCardReview(ctx, body),
   '/card/apply': body => handleCardApply(body),
   '/card/ask': (body, ctx) => handleCardAsk(ctx, body),

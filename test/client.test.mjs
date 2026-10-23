@@ -212,6 +212,18 @@ function find(node, predicate) {
   return find(node.children, predicate)
 }
 
+/** 深度优先找全部满足条件的元素 */
+function findAll(node, predicate, out = []) {
+  if (!node || typeof node === 'string') return out
+  if (Array.isArray(node)) {
+    for (const item of node) findAll(item, predicate, out)
+    return out
+  }
+  if (predicate(node)) out.push(node)
+  findAll(node.children, predicate, out)
+  return out
+}
+
 /** 元素内的纯文本（展开后的 children 是数组，要递归拼） */
 function textOf(node) {
   if (!node) return ''
@@ -223,6 +235,11 @@ function textOf(node) {
 /** 按文本找按钮 */
 function findButton(node, text) {
   return find(node, (item) => item.tag === 'button' && textOf(item).trim() === text)
+}
+
+// 按钮文字带条数（「同意，出卡片预览 2 条」）时按前缀找
+function findButtonByPrefix(node, prefix) {
+  return find(node, (item) => item.tag === 'button' && textOf(item).trim().startsWith(prefix))
 }
 
 // ---------------------------------------------------------------- 载入 bundle
@@ -396,6 +413,10 @@ const sandbox = {
       })
     }
     if (route.endsWith('/search')) return okJson(fixtures.search)
+    // 提议「同意」：宿主按 proposalId 生成正文并给出待写入批次
+    if (route.endsWith('/propose/accept')) {
+      return okJson({ ok: true, batchId: 'b_prop', cards: [{ title: 'RAII 资源管理', body: 'RAII 把资源生命周期绑到对象上。' }] })
+    }
     // 打开校验面板时先问「会用哪个模型」，好在标题旁边标出来
     if (route.endsWith('/card/model')) {
       return okJson({ ok: true, provider: 'deepseek-official', model: currentModel, source: 'session' })
@@ -517,12 +538,19 @@ const fakeCtx = {
   },
 }
 
-await check('apply 注册 main、sidebar.panellist、两个工具卡片视图与回答下方的卡片条', async () => {
+await check('apply 注册 main、sidebar.panellist、三个工具卡片视图与回答下方的卡片条', async () => {
   api.apply(fakeCtx)
-  assert.equal(registrations.length, 5)
+  assert.equal(registrations.length, 6)
   assert.deepEqual(
     registrations.map((item) => item.slot),
-    ['main', 'sidebar.panellist', 'tool.call.toolview', 'tool.call.toolview', 'conversation.chat.turnTail'],
+    [
+      'main',
+      'sidebar.panellist',
+      'tool.call.toolview',
+      'tool.call.toolview',
+      'tool.call.toolview',
+      'conversation.chat.turnTail',
+    ],
   )
   assert.equal(
     registrations.find((item) => item.slot === 'conversation.chat.turnTail').registration.options.id,
@@ -533,7 +561,11 @@ await check('apply 注册 main、sidebar.panellist、两个工具卡片视图与
     .filter((item) => item.slot === 'tool.call.toolview')
     .map((item) => item.registration.options.key)
     .sort()
-  assert.deepEqual(toolKeys, ['learn_save', 'learn_search'], '两个工具都要注册自己的卡片视图')
+  assert.deepEqual(
+    toolKeys,
+    ['learn_entries', 'learn_save', 'learn_search'],
+    '三个会带卡片的工具都要注册自己的卡片视图',
+  )
 })
 
 await check('apply 时 uiConversation 还没 provide：改用 ctx.inject 挂起，就绪后再注册定义', async () => {
@@ -545,7 +577,7 @@ await check('apply 时 uiConversation 还没 provide：改用 ctx.inject 挂起�
   )
 })
 
-await check('拿不到 uiConversation 也没有 ctx.inject：不抛错，其余四格照常注册', async () => {
+await check('拿不到 uiConversation 也没有 ctx.inject：不抛错，其余六格照常注册', async () => {
   const only = []
   const bare = {
     effect: () => () => {},
@@ -561,8 +593,15 @@ await check('拿不到 uiConversation 也没有 ctx.inject：不抛错，其余�
     },
   }
   api.apply(bare)
-  assert.equal(only.length, 5, '缺了这个服务只该少一张卡片条，不该让插件加载不出来')
-  assert.deepEqual(only, ['main', 'sidebar.panellist', 'tool.call.toolview', 'tool.call.toolview', 'conversation.chat.turnTail'])
+  assert.equal(only.length, 6, '缺了这个服务只该少一张卡片条，不该让插件加载不出来')
+  assert.deepEqual(only, [
+    'main',
+    'sidebar.panellist',
+    'tool.call.toolview',
+    'tool.call.toolview',
+    'tool.call.toolview',
+    'conversation.chat.turnTail',
+  ])
 })
 
 const mainRegistration = registrations.find((item) => item.slot === 'main').registration
@@ -859,6 +898,61 @@ await check('点关闭按钮收起浮层', async () => {
   )
 })
 
+// 2026-10-23 用户反馈：版本号就是时间戳，界面上又单独显示一块「更新时间」，
+// 同一个时间出现两遍（截图上是「面试 · 2026-10-23 15:57 · 2026-10-23 15:57」）。
+await check('版本号是时间戳时，卡片和浮层都不再另外显示一块时间', async () => {
+  const stamp = Date.UTC(2026, 9, 23, 7, 57) // 版本号（时间戳）
+  const updatedAt = '2026-10-22T10:00:00.000Z' // 故意选一个不同的时间，好分辨是哪一个被显示
+  const pad = (n) => String(n).padStart(2, '0')
+  const shortStamp = (ms) => {
+    const date = new Date(ms)
+    return pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
+  }
+  const versionText = shortStamp(stamp)
+  const updatedText = shortStamp(new Date(updatedAt).getTime())
+
+  const original = currentEntries
+  currentEntries = { ...fixtures.entries, entries: [{ ...fixtures.entries.entries[0], version: stamp, updatedAt }] }
+  try {
+    forget() // 重新挂载：不然 /entries 的 effect 不会重跑，拿到的还是旧数据
+    let view = await run(Panel, {})
+    const card = find(view.tree, (node) => node.tag === 'article')
+    assert.ok(card, '找不到卡片')
+    const foot = find(card, (node) => node.props && node.props.className === 'kb-card-foot')
+    assert.ok(foot, '找不到卡片脚注')
+    assert.ok(textOf(foot).includes(versionText), '卡片脚要显示版本号（时间戳）：' + textOf(foot))
+    assert.ok(!textOf(foot).includes(updatedText), '同一个时间不该显示两遍：' + textOf(foot))
+
+    // 浮层底栏同理
+    await card.props.onClick()
+    view = await run(Panel, {})
+    const meta = find(view.tree, (node) => node.props && node.props.className === 'kb-modal-foot')
+    assert.ok(meta, '浮层没打开或找不到底栏')
+    const metaText = textOf(meta)
+    assert.ok(metaText.includes(versionText), '浮层要显示版本号（时间戳）：' + metaText)
+    assert.ok(!metaText.includes(updatedText), '浮层里同一个时间不该显示两遍：' + metaText)
+  } finally {
+    currentEntries = original
+  }
+})
+
+await check('老数据（版本号还是 v2）仍然补一个更新时间', async () => {
+  const original = currentEntries
+  currentEntries = {
+    ...fixtures.entries,
+    entries: [{ ...fixtures.entries.entries[0], version: 2, updatedAt: '2026-10-22T10:00:00.000Z' }],
+  }
+  try {
+    forget() // 同上：要重新挂载才会重新拉 /entries
+    const view = await run(Panel, {})
+    const foot = find(view.tree, (node) => node.props && node.props.className === 'kb-card-foot')
+    const text = textOf(foot)
+    assert.match(text, /^v2 · /, '老数据的版本号还是 v2，后面才需要补时间：' + text)
+  } finally {
+    currentEntries = original
+  }
+})
+
 await check('卡片上的按钮会 stopPropagation，不会连带打开浮层', async () => {
   const view = await run(Panel, {})
   const card = find(view.tree, (node) => node.tag === 'article')
@@ -965,7 +1059,7 @@ await check('locale 已存在同一语言时不再拖垮整个插件', async () 
     },
   }
   api.apply(hotCtx) // 关键：不能抛
-  assert.equal(collected.length, 5, '五处注册都要完成')
+  assert.equal(collected.length, 6, '六处注册都要完成')
   const panellist = collected.find((item) => item.name === 'sidebar.panellist').registration
   assert.equal(panellist.options.id, 'learning-kb')
   assert.equal(panellist.options.label(), '学习知识库', '词典注册失败时要回落到中文兜底')
@@ -1289,7 +1383,7 @@ const cardBlock = {
 }
 
 await check('工具行只给一行摘要，不再渲染卡片（卡片在回答下方）', async () => {
-  assert.equal(toolViews.length, 2)
+  assert.equal(toolViews.length, 3)
   const Cards = toolViews.find((item) => item.registration.options.key === 'learn_search').registration.Component
   const view = await run(Cards, { block: cardBlock, phase: 'result', toolName: 'learn_search' })
   assert.match(view.html, /知识库命中 2 条/)
@@ -1316,6 +1410,36 @@ await check('没命中时给一句说明，不是空白', async () => {
     toolName: 'learn_search',
   })
   assert.match(view.html, /没有命中/)
+})
+
+await check('写入的工具行按角色说（本次新增 N 条（未写入））', async () => {
+  const Cards = toolViews.find((item) => item.registration.options.key === 'learn_save').registration.Component
+  const view = await run(Cards, {
+    block: {
+      kind: 'tool-result',
+      meta: {
+        kbCards: [
+          {
+            id: null,
+            title: '智能指针',
+            body: '独占所有权，离开作用域自动释放。',
+            topic: 'mysql-进阶',
+            topicName: 'MySQL 进阶',
+            tags: [],
+            verified: false,
+            version: 1,
+            role: 'new',
+            status: 'preview',
+          },
+        ],
+      },
+      call: { name: 'learn_save', argsRaw: '{}' },
+    },
+    phase: 'result',
+    toolName: 'learn_save',
+  })
+  assert.match(view.html, /本次新增 1 条/, '工具行要按角色说，不能一律「卡片 N 条」')
+  assert.match(view.html, /未写入/, '预览出来的还没进库，要说清楚')
 })
 
 await check('面板顶部有「未核实 N 条」入口（批量核实）', async () => {
@@ -1377,13 +1501,32 @@ await check('Definition 从 tool/result 的 meta.kbCards 收卡片，没有就�
   assert.equal(def.buildLocationData({ state: withCards }, 'session', undefined), null, '只发布到 turn 作用域')
 })
 
-await check('这一轮命中知识库时，回答下方出现卡片条（带三个动作）', async () => {
-  const view = await run(turnTailReg.Component, { turn: turnOf([{ seq: 12, cards: [oneCard] }], 20), seq: 20 })
+await check('这一轮命中知识库时，回答下方出现一行小预览；点开展开成卡片（带三个动作）', async () => {
+  // 2026-10-23 用户：「会话末尾的知识卡片太大了，可以做小当预览，可以点击或者悬停查看」
+  const props = { turn: turnOf([{ seq: 12, cards: [oneCard] }], 20), seq: 20 }
+  const view = await run(turnTailReg.Component, props)
   assert.match(view.html, /知识库命中 1 条/)
+  assert.match(view.html, /kb-mini-card/, '默认应该是一行小预览')
   assert.match(view.html, /间隙锁/)
-  assert.ok(findButton(view.tree, 'AI 校验补充'), '缺 AI 校验补充')
-  assert.ok(findButton(view.tree, '编辑'), '缺 编辑')
-  assert.ok(findButton(view.tree, '问一下'), '缺 问一下')
+  assert.ok(!findButton(view.tree, 'AI 校验补充'), '收起态不该占位置放三个动作')
+  const mini = find(view.tree, (node) => node.props && String(node.props.className || '').includes('kb-mini-card'))
+  assert.ok(mini, '找不到小预览')
+  assert.match(mini.props.title, /间隙锁锁住索引记录之间的间隙/, '悬停要能看到正文')
+  assert.match(mini.props.title, /只在 RR 下生效/, '悬停要给整段正文，不只是首行（2026-10-23 用户反馈）')
+  const titleNode = find(mini, (node) => node.props && node.props.className === 'kb-mini-title')
+  assert.ok(titleNode, '标题要单独一行')
+  await mini.props.onClick()
+  const opened = await run(turnTailReg.Component, props)
+  assert.ok(findButton(opened.tree, 'AI 校验补充'), '缺 AI 校验补充')
+  assert.ok(findButton(opened.tree, '编辑'), '缺 编辑')
+  assert.ok(findButton(opened.tree, '问一下'), '缺 问一下')
+  // 点卡片任意位置就能收起来（2026-10-23 用户：不要非得点按钮）
+  const head = find(opened.tree, (node) => node.props && node.props.className === 'kb-chat-head')
+  assert.ok(head, '找不到卡片头')
+  assert.equal(typeof head.props.onClick, 'function', '头部要能点一下就收起')
+  await head.props.onClick()
+  const collapsed = await run(turnTailReg.Component, props)
+  assert.match(collapsed.html, /kb-mini-card/, '点一下头部应该缩回一行预览')
 })
 
 await check('这一轮没命中就什么都不渲染', async () => {
@@ -1441,6 +1584,89 @@ await check('点一下相关知识点才展开', async () => {
   assert.match(textOf(reopened), /▾/, '展开后箭头要朝下')
 })
 
+await check('相关补充展开后是紧凑列表，不是完整卡片', async () => {
+  // 2026-10-23 用户：「related 只是属于同一知识领域，为什么还要放到选中卡片里，
+  // 直接放到下面待展开的相关知识里呗」—— 展开后要是完整卡片，用户分不清哪张是答案。
+  forget() // 上一条用例把「相关知识点」展开过了，重新挂载回到默认折叠
+  const props = { turn: turnOf([{ seq: 12, cards: [oneCard], related: [relatedCard] }], 20), seq: 20 }
+  const view = await run(turnTailReg.Component, props)
+  await find(view.tree, (item) => item.tag === 'button' && item.props && item.props.className === 'kb-related-head').props.onClick()
+  const after = await run(turnTailReg.Component, props)
+  const box = find(after.tree, (node) => node.props && node.props.className === 'kb-related')
+  assert.ok(box, '找不到相关补充区')
+  assert.equal(
+    find(box, (node) => node.props && String(node.props.className || '').includes('kb-chat-card')),
+    null,
+    '相关补充区里不该有完整卡片',
+  )
+  assert.ok(find(box, (node) => node.props && node.props.className === 'kb-rel-row'), '相关补充要渲染成紧凑一行')
+  assert.equal((after.html.match(/kb-chat-card/g) || []).length, 1, '只有命中那张是完整卡片')
+})
+
+await check('相关补充点开一行能看到正文，不是只有标题', async () => {
+  // 2026-10-23 用户：「那些相关知识点点开后没有卡片，只有文字，那也没有意义」
+  // —— 行要保持浅色小行（分得清不是答案），但点开必须是真正文。
+  forget()
+  const props = { turn: turnOf([{ seq: 12, cards: [oneCard], related: [relatedCard] }], 20) }
+  const view = await run(turnTailReg.Component, props)
+  await find(view.tree, (item) => item.tag === 'button' && item.props && item.props.className === 'kb-related-head').props.onClick()
+  let after = await run(turnTailReg.Component, props)
+  const row = find(after.tree, (node) => node.tag === 'button' && node.props && node.props.className === 'kb-rel-row')
+  assert.ok(row, '找不到相关补充那一行')
+  assert.equal(row.props['aria-expanded'], 'false', '默认不展开')
+  assert.ok(!after.html.includes('midpoint insertion strategy'), '没点开时不该铺正文')
+
+  await row.props.onClick()
+  after = await run(turnTailReg.Component, props)
+  assert.match(after.html, /midpoint insertion strategy/, '点开要看到正文')
+  const opened = find(after.tree, (node) => node.tag === 'button' && node.props && node.props.className === 'kb-rel-row')
+  assert.equal(opened.props['aria-expanded'], 'true', '点开后 aria-expanded 要变 true')
+  assert.match(textOf(opened), /▾/, '点开后箭头要朝下')
+  assert.match(after.html, /不是本轮答案/, '要标明它只是参考，不是答案')
+
+  await opened.props.onClick()
+  after = await run(turnTailReg.Component, props)
+  assert.ok(!after.html.includes('midpoint insertion strategy'), '再点一次要收回去')
+})
+
+await check('相关补充条数多时先摆 12 条，多出来的折成「再看 N 条」', async () => {
+  // 2026-10-23 用户：相关知识点不限制数量（后端全留），但一次铺几十行会把回答顶走。
+  forget()
+  const many = Array.from({ length: 15 }, (_, index) => ({
+    ...relatedCard,
+    id: 'k_r' + index,
+    title: '相关条目 ' + (index + 1),
+  }))
+  const props = { turn: turnOf([{ seq: 12, cards: [oneCard], related: many }], 20) }
+  const view = await run(turnTailReg.Component, props)
+  await find(view.tree, (item) => item.tag === 'button' && item.props && item.props.className === 'kb-related-head').props.onClick()
+  let after = await run(turnTailReg.Component, props)
+  const rows = []
+  const collect = (node) => {
+    if (!node || typeof node === 'string') return
+    if (Array.isArray(node)) return node.forEach(collect)
+    if (node.props && node.props.className === 'kb-rel-row') rows.push(node)
+    collect(node.children)
+  }
+  collect(after.tree)
+  assert.equal(rows.length, 12, '默认只摆 12 行')
+  const more = find(after.tree, (node) => node.tag === 'button' && node.props && node.props.className === 'kb-rel-more')
+  assert.ok(more, '要有「再看 N 条」')
+  assert.match(textOf(more), /再看 3 条/, '要写清还有几条')
+
+  await more.props.onClick()
+  after = await run(turnTailReg.Component, props)
+  let expanded = 0
+  const count = (node) => {
+    if (!node || typeof node === 'string') return
+    if (Array.isArray(node)) return node.forEach(count)
+    if (node.props && node.props.className === 'kb-rel-row') expanded++
+    count(node.children)
+  }
+  count(after.tree)
+  assert.equal(expanded, 15, '点开后 15 行都要出来')
+})
+
 await check('只有相关补充没有命中时也要渲染，不能空白', async () => {
   const view = await run(turnTailReg.Component, {
     turn: turnOf([{ seq: 12, cards: [], related: [relatedCard] }], 20),
@@ -1481,6 +1707,270 @@ await check('只有 kbRelated 的事件也记一条 entry', async () => {
   assert.equal(next.entries[0].related.length, 1)
 })
 
+// ------------------------------------------------- 卡片角色 + 预览先行（批次 2）
+console.log('卡片角色与预览先行（2026-10-23 批次 2）')
+
+// 2026-10-23 用户反馈：「选中卡片出现了同一张卡片多次被命中」
+// 一轮里的卡片是把所有工具调用的卡片拼起来的：按方向检索四次，
+// 同一条可能同时沾几个方向被命中几次。
+await check('同一张卡片被多个工具调用命中时，界面上只出现一次', async () => {
+  const many = [{ seq: 11, cards: [oneCard] }, { seq: 12, cards: [oneCard] }, { seq: 13, cards: [oneCard] }]
+  const view = await run(turnTailReg.Component, { turn: turnOf(many, 20), seq: 20 })
+  // 收起态一行一张卡：直接数小预览行
+  const count = (view.html.match(/kb-mini-card/g) || []).length
+  assert.equal(count, 1, '同一个 id 只该渲染一次，实际 ' + count + ' 次')
+  assert.match(view.html, /知识库命中 1 条/, '计数也要按去重后的算')
+})
+
+await check('已经是命中的卡片，不再当「相关补充」重复列一次', async () => {
+  const view = await run(turnTailReg.Component, {
+    turn: turnOf([{ seq: 12, cards: [oneCard], related: [oneCard, relatedCard] }], 20),
+    seq: 20,
+  })
+  const count = (view.html.match(/kb-mini-card/g) || []).length
+  assert.equal(count, 1, '命中卡不该在相关补充里再出现一次')
+  assert.match(view.html, /相关 1 条/, '相关补充只剩真正没列过的那条')
+})
+
+await check('「库中已有」和「本次更新」里的同一标题不算重复（两种投影）', async () => {
+  const updateCard = { ...oneCard, role: 'update' }
+  const view = await run(turnTailReg.Component, {
+    turn: turnOf([{ seq: 12, cards: [oneCard, updateCard] }], 20),
+    seq: 20,
+  })
+  const count = (view.html.match(/kb-mini-card/g) || []).length
+  assert.equal(count, 2, '已有 + 更新 是两种投影，都要显示')
+})
+
+await check('卡片头上有角色徽章（库中已有）', async () => {
+  const view = await run(turnTailReg.Component, { turn: turnOf([{ seq: 12, cards: [oneCard] }], 20), seq: 20 })
+  assert.match(view.html, /kb-role-badge/, '缺角色徽章')
+  assert.match(view.html, /库中已有/, '徽章文案不对')
+  assert.match(view.html, /kb-role-existing/, '卡片要带角色类名（色条按角色取色）')
+})
+
+// 2026-10-23 用户反馈：「有多个卡片的时候需要展开，这个按键在卡片最上方，
+// 应当在最下方合理一点」—— 用户是看完这几张才决定要不要展开的。
+await check('「展开全部」在卡片下方，不在最上方', async () => {
+  const many = Array.from({ length: 6 }, (_, i) => ({ ...oneCard, id: 'k_m' + i, title: '卡片 ' + i }))
+  const view = await run(turnTailReg.Component, { turn: turnOf([{ seq: 12, cards: many }], 20), seq: 20 })
+  const head = find(view.tree, (node) => node.props && node.props.className === 'kb-stack-head kb-turn-head')
+  assert.ok(head, '找不到标题行')
+  assert.equal(find(head, (node) => node.tag === 'button'), null, '展开按钮不该在头顶')
+  const foot = find(view.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
+  assert.ok(foot, '底部缺 kb-turn-foot 行')
+  assert.ok(findButton(foot, '展开全部 6 条'), '展开按钮要在卡片下方')
+})
+
+await check('点底部的「展开全部」→ 六张全出来，按钮变「收起」', async () => {
+  const many = Array.from({ length: 6 }, (_, i) => ({ ...oneCard, id: 'k_m' + i, title: '卡片 ' + i }))
+  const props = { turn: turnOf([{ seq: 12, cards: many }], 20), seq: 20 }
+  const view = await run(turnTailReg.Component, props)
+  const foot = find(view.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
+  await findButton(foot, '展开全部 6 条').props.onClick()
+  const after = await run(turnTailReg.Component, props)
+  assert.match(after.html, /卡片 5/, '展开后最后一张也要出来')
+  const footAfter = find(after.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
+  assert.ok(findButton(footAfter, '收起'), '展开后按钮要变「收起」，而且还在底部')
+})
+
+const newCard = {
+  id: null,
+  title: '智能指针',
+  body: '独占所有权。\n- 离开作用域自动释放',
+  topic: 'mysql-进阶',
+  topicName: 'MySQL 进阶',
+  tags: ['c++'],
+  verified: false,
+  version: 1,
+  role: 'new',
+}
+
+await check('不同角色的卡片分组显示，不混排', async () => {
+  const view = await run(turnTailReg.Component, {
+    turn: turnOf([{ seq: 12, cards: [oneCard, newCard] }], 20),
+    seq: 20,
+  })
+  assert.match(view.html, /kb-group-head/, '要有分组标题')
+  assert.match(view.html, /本次新增 1 条/, '缺「本次新增」分组')
+  assert.match(view.html, /库中已有 1 条/, '缺「库中已有」分组')
+  assert.ok(view.html.indexOf('本次新增') < view.html.indexOf('库中已有'), '要加的卡片要排在已有卡片前面')
+  assert.match(view.html, /kb-role-new/, '新卡片要带 new 角色类名')
+})
+
+await check('没有 id 的预览卡不给「评审 / 编辑 / 问一下」', async () => {
+  const props = { turn: turnOf([{ seq: 12, cards: [newCard] }], 20), seq: 20 }
+  // 先展开（收起态本来就只显示一行，谈不上有没有动作）
+  const first = await run(turnTailReg.Component, props)
+  const mini = find(first.tree, (node) => node.props && String(node.props.className || '').includes('kb-mini-card'))
+  assert.ok(mini, '找不到小预览')
+  await mini.props.onClick()
+  const view = await run(turnTailReg.Component, props)
+  assert.ok(!findButton(view.tree, 'AI 校验补充'), '预览卡不该有可写库的动作')
+  assert.ok(!findButton(view.tree, '编辑'), '预览卡不该有可写库的动作')
+  assert.ok(!findButton(view.tree, '问一下'), '预览卡不该有可写库的动作')
+  assert.match(view.html, /还没进库/, '要说明这张卡还没进库')
+})
+
+await check('提议条：标题+理由摆出来，点「同意」出预览，再点「确认写入」', async () => {
+  forget()
+  const proposal = {
+    id: 'p_1',
+    topic: '面试',
+    topicName: '面试',
+    items: [
+      { title: 'RAII 资源管理', why: '库里没有独立条目' },
+      { title: 'STL 容器与迭代器体系', why: '只散在 vector 几条里' },
+    ],
+  }
+  const props = { turn: turnOf([{ seq: 12, proposal }], 20), seq: 20 }
+  let view = await run(turnTailReg.Component, props)
+  assert.match(view.html, /kb-proposal/, '缺提议条')
+  assert.match(view.html, /提议补 2 条/)
+  assert.match(view.html, /库里没有独立条目/, '理由要摆出来')
+  const accept = findButtonByPrefix(view.tree, '同意，出卡片预览')
+  assert.ok(accept, '缺「同意，出卡片预览」按钮')
+  await accept.props.onClick()
+  view = await run(turnTailReg.Component, props)
+  assert.match(view.html, /RAII 把资源生命周期绑到对象上/, '生成出来的正文要能预览')
+  const confirm = findButton(view.tree, '确认写入 1 条')
+  assert.ok(confirm, '预览之后要给「确认写入」')
+  const before = calls.length
+  await confirm.props.onClick()
+  const posted = calls.slice(before).find(call => String(call.url).endsWith('/kb/api/save'))
+  assert.ok(posted, '确认写入要调 /kb/api/save')
+  assert.equal(posted.body.batchId, 'b_prop')
+  view = await run(turnTailReg.Component, props)
+  assert.match(view.html, /已写入/, '写完之后要告诉用户')
+})
+
+await check('提议条：每条能单独勾选，还能挑补到哪个主题（2026-10-23 用户要求）', async () => {
+  forget()
+  const proposal = {
+    id: 'p_pick',
+    topic: 'mian-shi',
+    topicName: '面试',
+    topics: [
+      { slug: 'mian-shi', name: '面试', count: 128 },
+      { slug: 'mysql-jin-jie', name: 'mysql-进阶', count: 123 },
+    ],
+    items: [
+      { title: 'TIME_WAIT 为什么等 2MSL', why: '库里没有独立条目' },
+      { title: '为什么挥手需要四次', why: '只散在别的条目里' },
+    ],
+  }
+  const props = { turn: turnOf([{ seq: 12, proposal }], 20), seq: 20 }
+  let view = await run(turnTailReg.Component, props)
+  assert.match(view.html, /TIME_WAIT 为什么等 2MSL/)
+  // 每条一个勾选框
+  const boxes = findAll(view.tree, item => item.tag === 'input' && item.props && item.props.type === 'checkbox')
+  assert.equal(boxes.length, 2, '每个提议条目都要能单独勾选')
+  // 主题下拉
+  const selects = findAll(view.tree, item => item.tag === 'select')
+  assert.ok(selects.length, '要有主题下拉：补到哪个主题要能选')
+  assert.match(view.html, /mysql-进阶/, '下拉里要列出主题')
+  // 取消勾第一条 → 只提交剩下那条
+  await boxes[0].props.onChange()
+  view = await run(turnTailReg.Component, props)
+  const accept = findButtonByPrefix(view.tree, '同意，出卡片预览')
+  assert.ok(accept, '缺同意按钮')
+  assert.match(textOf(accept), /1 条/, '按钮上要写明只补几条')
+  const before = calls.length
+  await accept.props.onClick()
+  const posted = calls.slice(before).find(call => String(call.url).endsWith('/kb/api/propose/accept'))
+  assert.ok(posted, '要调 /kb/api/propose/accept')
+  assert.deepEqual(posted.body.items, [1], '只提交勾上的那一条')
+  assert.equal(posted.body.topic, 'mian-shi', '还要带上选中的主题')
+})
+
+await check('清单列出来的卡片不叫「命中」（2026-10-23 用户实测 251 张）', async () => {
+  const listed = await run(turnTailReg.Component, {
+    turn: turnOf([{ seq: 12, cards: [oneCard, relatedCard], source: 'entries' }], 20),
+    seq: 20,
+  })
+  assert.match(listed.html, /列出 2 条/, '清单要叫「列出」')
+  assert.ok(!listed.html.includes('知识库命中'), '不能把列出来的说成命中')
+  const searched = await run(turnTailReg.Component, {
+    turn: turnOf([{ seq: 12, cards: [oneCard], source: 'search' }], 20),
+    seq: 20,
+  })
+  assert.match(searched.html, /知识库命中 1 条/, '检索出来的才叫命中')
+})
+
+await check('有待写入批次时出现「确认写入 N 条」按钮', async () => {
+  const props = {
+    turn: turnOf([{ seq: 12, cards: [oneCard], save: { batchId: 'b_1', count: 3, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } }], 20),
+    seq: 20,
+  }
+  const view = await run(turnTailReg.Component, props)
+  assert.ok(findButton(view.tree, '确认写入 3 条'), '缺「确认写入」按钮')
+  assert.match(view.html, /这批卡片还没进库/, '要说明这批还没进库')
+})
+
+await check('点「确认写入」会 POST /kb/api/save，写完显示已写入', async () => {
+  forget() // 丢掉上一条用例留下的状态（已写入），从干净状态开始
+  const props = {
+    turn: turnOf([{ seq: 12, cards: [oneCard], save: { batchId: 'b_1', count: 3, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } }], 20),
+    seq: 20,
+  }
+  const view = await run(turnTailReg.Component, props)
+  const button = findButton(view.tree, '确认写入 3 条')
+  assert.ok(button, '缺「确认写入」按钮')
+  const before = calls.length
+  await button.props.onClick()
+  const posted = calls.slice(before).find(call => String(call.url).endsWith('/kb/api/save'))
+  assert.ok(posted, '应调 /kb/api/save')
+  assert.equal(posted.method, 'POST')
+  assert.equal(posted.body.batchId, 'b_1')
+  const after = await run(turnTailReg.Component, props)
+  assert.match(after.html, /已写入 3 条/, '写完要显示已写入')
+  assert.ok(!findButton(after.tree, '确认写入 3 条'), '写完不该还能再点')
+})
+
+await check('写入失败时把原因显示出来，不静默', async () => {
+  forget() // 同样要清掉上一条用例的「已写入」状态
+  const props = {
+    turn: turnOf([{ seq: 12, cards: [oneCard], save: { batchId: 'b_2', count: 1, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } }], 20),
+    seq: 20,
+  }
+  const view = await run(turnTailReg.Component, props)
+  const button = findButton(view.tree, '确认写入 1 条')
+  // 把这次调用的返回换成失败
+  const originalFetch = sandbox.fetch
+  sandbox.fetch = async (url, options = {}) => {
+    if (String(url).endsWith('/kb/api/save')) {
+      calls.push({ url, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined })
+      return { ok: false, status: 409, json: async () => ({ error: '这批和库里的条目高度相似' }) }
+    }
+    return originalFetch(url, options)
+  }
+  await button.props.onClick()
+  sandbox.fetch = originalFetch
+  const after = await run(turnTailReg.Component, props)
+  assert.match(after.html, /这批和库里的条目高度相似/, '失败原因要显示给用户')
+})
+
+await check('宿主没重启时点「确认写入」会说清要重启，不甩「未知接口」', async () => {
+  forget()
+  const props = {
+    turn: turnOf([{ seq: 12, cards: [oneCard], save: { batchId: 'b_3', count: 1, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } }], 20),
+    seq: 20,
+  }
+  const view = await run(turnTailReg.Component, props)
+  const button = findButton(view.tree, '确认写入 1 条')
+  const originalFetch = sandbox.fetch
+  sandbox.fetch = async (url, options = {}) => {
+    if (String(url).endsWith('/kb/api/save')) {
+      return { ok: false, status: 404, json: async () => ({ error: '未知接口 /save' }) }
+    }
+    return originalFetch(url, options)
+  }
+  await button.props.onClick()
+  sandbox.fetch = originalFetch
+  const after = await run(turnTailReg.Component, props)
+  assert.match(after.html, /重启 DSH/, '要说清要重启 DSH')
+})
+
 console.log('AI 校验面板')
 const turnProps = (cards) => ({ turn: turnOf([{ seq: 12, cards }], 20), seq: 20 })
 const allWithClass = (node, className, out = []) => {
@@ -1496,12 +1986,33 @@ const allWithClass = (node, className, out = []) => {
 const badges = (node) =>
   allWithClass(node, 'kb-badge quiet clickable')
 
+const openAll = async (props) => {
+  // 会话末尾的卡片默认收成一行预览（2026-10-23 用户要求），
+  // 要测卡片内部（角标 / 动作按钮 / 正文）就得先展开。
+  const miniCards = (node, out = []) => {
+    if (!node || typeof node === 'string') return out
+    if (Array.isArray(node)) {
+      for (const item of node) miniCards(item, out)
+      return out
+    }
+    if (node.props && String(node.props.className || '').includes('kb-mini-card')) out.push(node)
+    miniCards(node.children, out)
+    return out
+  }
+  const first = await run(turnTailReg.Component, props)
+  for (const node of miniCards(first.tree)) {
+    if (node.props && typeof node.props.onClick === 'function') await node.props.onClick()
+  }
+  return run(turnTailReg.Component, props)
+}
+
+
 await check('校验面板按三条路径分区块，各自带标题与说明', async () => {
-  const view = await run(turnTailReg.Component, turnProps([oneCard]))
+  const view = await openAll(turnProps([oneCard]))
   const badge = badges(view.tree)[0]
   assert.ok(badge, '找不到卡片上的核实角标')
   await badge.props.onClick()
-  const shown = await run(turnTailReg.Component, turnProps([oneCard]))
+  const shown = await openAll(turnProps([oneCard]))
   assert.match(shown.html, /核实这条/)
   assert.match(shown.html, /只记录谁确认的，不改卡片内容/)
   const sections = allWithClass(shown.tree, 'kb-vsec')
@@ -1515,7 +2026,7 @@ await check('校验面板按三条路径分区块，各自带标题与说明', a
 })
 
 await check('每块都是完整句子说明，不是一个标签 + 一个按钮', async () => {
-  const shown = await run(turnTailReg.Component, turnProps([oneCard]))
+  const shown = await openAll(turnProps([oneCard]))
   const descs = allWithClass(shown.tree, 'kb-vsec-desc').map((node) => textOf(node))
   assert.equal(descs.length, 3, '三个区块都该有说明文字')
   for (const desc of descs) assert.ok(desc.length >= 8, '说明太短，等于没解释：' + desc)
@@ -1527,23 +2038,23 @@ await check('每块都是完整句子说明，不是一个标签 + 一个按钮'
 })
 
 await check('点「附上出处」才出现输入框和保存按钮', async () => {
-  const shown = await run(turnTailReg.Component, turnProps([oneCard]))
+  const shown = await openAll(turnProps([oneCard]))
   assert.equal(find(shown.tree, (node) => node.tag === 'input'), null, '默认不该有输入框')
   const open = findButton(shown.tree, '填来源')
   assert.ok(open, '找不到「填来源」按钮')
   await open.props.onClick()
-  const after = await run(turnTailReg.Component, turnProps([oneCard]))
+  const after = await openAll(turnProps([oneCard]))
   assert.ok(find(after.tree, (node) => node.tag === 'input'), '点了之后要出现输入框')
   assert.ok(findButton(after.tree, '存为来源并核实'), '要有保存按钮')
 })
 
 await check('点「开始校验」后问题单独成块，带计数', async () => {
   currentIssues = [{ text: 'TCP 首部长度写反了：固定 20 字节，可变 20~60 字节' }]
-  const shown = await run(turnTailReg.Component, turnProps([oneCard]))
+  const shown = await openAll(turnProps([oneCard]))
   const start = findButton(shown.tree, '开始校验')
   assert.ok(start, '找不到「开始校验」按钮')
   await start.props.onClick()
-  const after = await run(turnTailReg.Component, turnProps([oneCard]))
+  const after = await openAll(turnProps([oneCard]))
   assert.equal(allWithClass(after.tree, 'kb-vissues').length, 1, '问题要单独成块')
   assert.match(after.html, /AI 发现的问题 · 1/)
   assert.match(after.html, /TCP 首部长度写反了/)
@@ -1554,16 +2065,16 @@ await check('AI 没发现问题时给出结论 + 无异议按钮', async () => {
   // 用第二张**未核实**的卡（另一个 ChatCard 实例），避免复用上面那张已经查过的状态
   const anotherCard = { ...oneCard, id: 'k_3', title: 'TCP 与 UDP 的区别' }
   const props = turnProps([oneCard, anotherCard])
-  const shown = await run(turnTailReg.Component, props)
+  const shown = await openAll(props)
   const list = badges(shown.tree)
   assert.ok(list.length >= 2, '应该有两张卡的角标')
   await list[1].props.onClick()
-  await run(turnTailReg.Component, props)
-  const opened = await run(turnTailReg.Component, props)
+  await openAll(props)
+  const opened = await openAll(props)
   const start = findButton(opened.tree, '开始校验')
   assert.ok(start, '找不到第二张卡的「开始校验」')
   await start.props.onClick()
-  const after = await run(turnTailReg.Component, props)
+  const after = await openAll(props)
   assert.match(after.html, /AI 没有发现事实性问题/)
   assert.ok(findButton(after.tree, '无异议，标为已核实'))
   // 只看**第二张卡**的面板：第一张卡的问题块还开着，不能全局计数
@@ -1578,20 +2089,20 @@ console.log('AI 校验补充工作台')
     所以这里先确保打开，再点「让 AI 校验」拉一次当前 fixture。 */
 const openWorkbench = async () => {
   const props = turnProps([oneCard])
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   if (!String(view.html).includes('kb-workpanel')) {
     const button = findButton(view.tree, 'AI 校验补充')
     assert.ok(button, '找不到「AI 校验补充」按钮')
     await button.props.onClick()
     await sleep(30)
-    view = await run(turnTailReg.Component, props)
+    view = await openAll(props)
   }
   // 已经有结果时按钮是「重新校验」（走强制重跑），两种标签都要认
   const runButton = findButton(view.tree, '让 AI 校验') || findButton(view.tree, '重新校验')
   if (runButton) {
     await runButton.props.onClick()
     await sleep(30)
-    view = await run(turnTailReg.Component, props)
+    view = await openAll(props)
   }
   return view
 }
@@ -1615,7 +2126,7 @@ await check('点「采纳」把要点追加进正文', async () => {
   const adopt = findButton(shown.tree, '采纳')
   assert.ok(adopt, '找不到「采纳」按钮')
   await adopt.props.onClick()
-  const after = await run(turnTailReg.Component, turnProps([oneCard]))
+  const after = await openAll(turnProps([oneCard]))
   const area = find(after.tree, (node) => node.tag === 'textarea' && node.props && String(node.props.className || '').includes('kb-work-body'))
   assert.ok(area, '找不到正文框')
   assert.match(String(area.props.value), /UDP 首部固定 8 字节/, '采纳的要点要进正文')
@@ -1629,7 +2140,7 @@ await check('点「忽略」把问题从列表里去掉', async () => {
   const ignores = allWithClass(shown.tree, 'kb-vbtn').filter((node) => textOf(node).trim() === '忽略')
   assert.ok(ignores.length >= 2, '每条问题都该有「忽略」')
   await ignores[0].props.onClick()
-  const after = await run(turnTailReg.Component, turnProps([oneCard]))
+  const after = await openAll(turnProps([oneCard]))
   assert.match(after.html, /发现的问题 · 1/, '忽略一条后计数要减')
   assert.ok(!after.html.includes('第一条问题'), '忽略掉的那条不该还在')
 })
@@ -1668,12 +2179,12 @@ await check('编辑框里看不到 ** / 反引号 / 【】 这些标记，只剩
   currentSuggested = ''
   forget() // 重新挂载，别复用上一条用例残留的 hook 状态
   const props = turnProps([markupCard])
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   const open = findButton(view.tree, 'AI 校验补充')
   assert.ok(open, '找不到「AI 校验补充」按钮')
   await open.props.onClick()
   await sleep(30)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   const area = find(
     view.tree,
     (node) => node.tag === 'textarea' && String((node.props && node.props.className) || '').includes('kb-work-body'),
@@ -1689,12 +2200,12 @@ await check('编辑框里看不到 ** / 反引号 / 【】 这些标记，只剩
 await check('编辑框没改动就保存 → 写回的是带标记的原正文（不会被洗成裸文本）', async () => {
   const props = turnProps([markupCard])
   const before = calls.filter((item) => item.url.endsWith('/card/apply')).length
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   const first = findButton(view.tree, '覆盖原卡片')
   assert.ok(first, '找不到「覆盖原卡片」按钮')
   await first.props.onClick()
   await sleep(10)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   const confirm = findButton(view.tree, '覆盖原卡片')
   assert.ok(confirm, '二次确认按钮没出现')
   await confirm.props.onClick()
@@ -1718,19 +2229,19 @@ await check('关掉再点开「AI 校验补充」→ 命中缓存，不再请求
 
   // 第一次打开：真的调一次
   forget()
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   await findButton(view.tree, 'AI 校验补充').props.onClick()
   await sleep(30)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   assert.equal(reviewCalls(), baseline + 1, '第一次打开应该请求一次')
   assert.match(view.html, /发现的问题 · 1/, '结果要显示出来')
 
   // 关掉再打开 = 组件重新挂载（真实界面里 ref/state 都是新的）
   forget()
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   await findButton(view.tree, 'AI 校验补充').props.onClick()
   await sleep(30)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   assert.equal(reviewCalls(), baseline + 1, '第二次打开不该再调模型：' + reviewCalls())
   assert.match(view.html, /用的是上次的结果，这次没调模型/, '复用缓存要明说，别让用户以为又调了一次')
   assert.match(view.html, /发现的问题 · 1/, '缓存的结果要照常显示')
@@ -1753,10 +2264,10 @@ await check('面板显示「本次 N tokens」，侧边栏显示累计', async (
   currentSuggested = ''
   forget()
   const props = turnProps([oneCard])
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   await findButton(view.tree, 'AI 校验补充').props.onClick()
   await sleep(30)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   assert.match(view.html, /本次 1,540 tokens/, '面板要写清这次用了多少 tokens')
   assert.ok(api.readTokenTotal() >= 1540, '用量要累计起来：' + api.readTokenTotal())
   const panel = await run(Panel, {})
@@ -1767,10 +2278,10 @@ await check('命中缓存时显示「上次 N tokens」，不重复计费', asyn
   const props = turnProps([oneCard])
   const before = api.readTokenTotal()
   forget()
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   await findButton(view.tree, 'AI 校验补充').props.onClick()
   await sleep(30)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   assert.match(view.html, /上次 1,540 tokens/, '缓存结果要标明是上次的用量')
   assert.equal(api.readTokenTotal(), before, '缓存命中不能再加一次')
 })
@@ -1779,13 +2290,13 @@ console.log('查看当前版本（改完之后这一版）')
 await check('没改时显示「已保存 · vN」；改了要显示改后的内容并标明未保存', async () => {
   const props = turnProps([markupCard])
   forget()
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   await findButton(view.tree, 'AI 校验补充').props.onClick()
   await sleep(30)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   await findButton(view.tree, '查看当前版本').props.onClick()
   await sleep(10)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   assert.match(view.html, /已保存 · v2/, '没改的时候标明已保存 + 版本号')
   assert.match(view.html, /MySQL 8\.0 分四层/, '要渲染正文，不是只给版本号')
 
@@ -1797,20 +2308,20 @@ await check('没改时显示「已保存 · vN」；改了要显示改后的内�
   assert.ok(area, '找不到正文框')
   await area.props.onChange({ target: { value: String(area.props.value) + '\n- 新增要点：文件系统层' } })
   await sleep(10)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   assert.match(view.html, /当前是未保存的修改 · 库里仍是 v2/, '改了要如实标出来')
   assert.match(view.html, /新增要点：文件系统层/, '要显示改完之后的内容，而不是库里那份旧的')
 })
 
 await check('写回之后变成「已保存 · v9」，内容也跟着换成新版本', async () => {
   const props = turnProps([markupCard])
-  let view = await run(turnTailReg.Component, props)
+  let view = await openAll(props)
   await findButton(view.tree, '覆盖原卡片').props.onClick()
   await sleep(10)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   await findButton(view.tree, '覆盖原卡片').props.onClick()
   await sleep(30)
-  view = await run(turnTailReg.Component, props)
+  view = await openAll(props)
   assert.match(view.html, /已保存 · v9/, '写回后版本号要更新')
   assert.match(view.html, /写回后的正文/, '写回后显示的要是新内容')
 })
@@ -1820,7 +2331,7 @@ await check('库里版本比会话里新 → 禁用「AI 校验补充」「编�
   currentStoreVersion = 5 // 库里已经是 v5，会话里还拿着 v2
   api.clearCardVersionCache()
   forget()
-  const view = await run(turnTailReg.Component, turnProps([oneCard]))
+  const view = await openAll(turnProps([oneCard]))
   const review = findButton(view.tree, 'AI 校验补充')
   const edit = findButton(view.tree, '编辑')
   assert.ok(review, '找不到「AI 校验补充」按钮')
@@ -1838,7 +2349,7 @@ await check('版本一致 → 两个按钮照常可用', async () => {
   currentStoreVersion = 2
   api.clearCardVersionCache()
   forget()
-  const view = await run(turnTailReg.Component, turnProps([oneCard]))
+  const view = await openAll(turnProps([oneCard]))
   const review = findButton(view.tree, 'AI 校验补充')
   const edit = findButton(view.tree, '编辑')
   assert.equal(review.props.disabled, false, '不过期就不该禁用')

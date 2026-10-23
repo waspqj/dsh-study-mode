@@ -1,7 +1,7 @@
 {
   "name": "dsh-study-mode",
-  "version": "0.3.17",
-  "description": "Learning-mode agent preset for DeepSeek Harness: topic knowledge bases with 4-tier retrieval, plus an embedded knowledge-base panel in the sidebar.",
+  "version": "0.3.18",
+  "description": "学习模式 agent 预设：主题知识库 + 检索优先的回答（命中标出处、查不到标未验证），侧边栏带知识库面板。",
   "keywords": [
     "deepseek-harness",
     "dsh",

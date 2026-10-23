@@ -15,14 +15,27 @@
 
 import { callModel, mergeUsage } from './llm.js'
 
-/** 送进模型的候选上限：再多就不划算了，本地排名已经够靠前。 */
-export const RERANK_CANDIDATES = 8
+/**
+ * 送进模型的候选上限。
+ *
+ * 2026-10-23 用户问「原来怎么那么多」时的账：以前一轮里模型调 **4 次** learn_search
+ * （每个方向一次），每次看 8 条候选 → 累计 32 条候选、16-20 张卡。现在按新规则
+ * **一次整句检索**，候选池就是上限，8 条时命中 + 相关最多 8 张，所以池子提回 16 条
+ * （每个方向 4 条）—— 一轮 16 条候选仍然比原来 4×8 = 32 条便宜一半。
+ */
+export const RERANK_CANDIDATES = 16
 
 /** 每条候选在提示词里的正文摘要长度。太长会把提示词撑爆，也不利于模型抓重点。 */
-const EXCERPT = 160
+const EXCERPT = 100
 
-/** 相关补充最多保留几条（卡片区默认折叠，但也不能无限长）。 */
-export const MAX_RELATED = 3
+/**
+ * 相关补充**不限条数**（2026-10-23 用户定：「相关知识点不用限制数量，既然这个是比较宽松
+ * 的筛选，那自然会有很多」）。
+ *
+ * 界面上 related 是默认折叠的一行一条、点开才铺正文，条数多不占地方；
+ * 而一刀切砍到 2 条会把真正该看的背景条目砍掉。精度靠判据（同主题同领域）守，不靠数量守。
+ */
+export const RELATED_LIMIT = Infinity
 
 /**
  * 单次重排的超时：卡在这一步会拖慢整个回答，所以给得比校验短。
@@ -41,6 +54,11 @@ export const RERANK_KEYS = ['match', 'related', 'drop']
  * 输出预算先花在思考上，2000 经常不够写正文 —— 表现是「模型没有返回内容」，
  * 于是重排整个失效、悄悄退回本地排序，用户只感觉到"搜得不准"。
  * 现在首次给 3000；万一还是空（见下面的重试），加到 6000 再试一次。
+ *
+ * 2026-10-23 用户实测（一次多方向检索花了 111k token）后复核过：重排这一层每次调用
+ * 大约 1k 输入 + 3k 输出，4 个方向合计 ~16k —— **大头不在这里**，在主回合
+ * （读 10 张卡 + 写详尽回答 + 思考型模型自己的思考）。所以这里不降预算：
+ * 降到 800 会让思考型模型思考不完就返回空 → 退回本地排序 → 又变成"搜得不准"。
  */
 export const RERANK_MAX_TOKENS = 3000
 export const RERANK_RETRY_MAX_TOKENS = 6000
@@ -57,10 +75,9 @@ const NO_THINK_RULE = [
 
 const SYSTEM_PROMPT = [
   '你是知识库检索的相关性判定器。',
-  '用户会给你一个问题，和若干条候选知识点。',
-  '你的任务只有一个：判断每条候选与问题的关系，然后输出 JSON。',
-  '不要解释，不要补充知识点内容，不要输出 JSON 以外的任何文字。',
-  '不要输出思考过程：先想清楚，然后只输出 JSON。',
+  '用户会给你一个问题和若干条候选知识点。',
+  '任务只有一个：判断每条候选与问题的关系，输出 JSON。',
+  '不要解释，不要补充知识点内容，不要输出 JSON 以外的文字，也不要输出思考过程。',
 ].join('\n')
 
 /**
@@ -81,7 +98,7 @@ function excerpt(hit) {
  * @param {object[]} hits 候选命中（已按本地分排序）
  * @returns {string} 提示词
  */
-export function buildRerankPrompt(query, hits) {
+export function buildRerankPrompt(query, hits, mode = 'breadth') {
   const lines = []
   lines.push('用户问题：' + String(query || '').trim())
   lines.push('')
@@ -89,8 +106,11 @@ export function buildRerankPrompt(query, hits) {
   hits.forEach((hit, index) => {
     const tags = Array.isArray(hit.tags) && hit.tags.length ? ' 标签 ' + hit.tags.join('/') : ''
     const topic = hit.topic ? ' 主题 ' + hit.topic : ''
+    // 领域（appliesTo）必须给：2026-10-23 用户实测问 C++ 却混进「什么是容器化技术（分布式）」
+    // 「MEMORY 表的内存管理（mysql-进阶）」—— 模型看不到领域，只能靠字面「容器」「内存」联想。
+    const domain = hit.appliesTo ? ' 领域 ' + hit.appliesTo : ''
     lines.push(
-      index + 1 + '. id=' + String(hit.id) + ' 《' + String(hit.title || '') + '》' + topic + tags,
+      index + 1 + '. id=' + String(hit.id) + ' 《' + String(hit.title || '') + '》' + topic + domain + tags,
     )
     const body = excerpt(hit)
     if (body) lines.push('   摘要：' + body)
@@ -100,11 +120,37 @@ export function buildRerankPrompt(query, hits) {
   lines.push(
     '{"match":["id",...],"related":["id",...],"drop":["id",...]}',
   )
-  lines.push('- match：直接回答了用户的问题，是答案本身；')
-  lines.push('- related：不是答案，但属于同一知识领域，能作为背景补充；')
-  lines.push('- drop：和问题无关，或者只有字面巧合。')
-  lines.push('match 最多 ' + Math.min(hits.length, 5) + ' 条，related 最多 ' + MAX_RELATED + ' 条。')
+  lines.push('- match：直接回答了用户的问题 —— 用户读完这一条就能得到答案；')
+  // 2026-10-23 用户实测：命中 4 条时 related 只剩 1 条 —— 这一档本意是"宽松的相关"，
+  // 以前写成「和某条 match 是相邻条目」＋「宁可只给 1 条真命中」，模型就把同主题的
+  // 背景条目全 drop 了。改成：同一主题、同一领域、内容相关就放 related，宁可多给。
+  lines.push(
+    '- related：属于**同一个主题、同一个领域**、内容确实相关的条目都放这里 —— ' +
+      '同一方向的相邻知识点（问 STL 时，vector / 模板 / 迭代器 那几条）、这几条命中要用到的背景条目也算。' +
+      '这一档是给用户顺带看的宽松档，**宁可多给**；只是共享一个词（内存 / 连接 / 容器 / 线程 / 页）的一律 drop，不算 related；',
+  )
+  lines.push('- drop：只丢两种 —— ① 领域 / 技术方向明显不同；② 除了共享一个通用词以外毫无关系。')
+  if (mode === 'exact') {
+    // 具体问题：用户实测「明明有一个卡片比较合适、完全够用，他还有很多的皮命中」，
+    // 相关的也铺了一堆。所以这一档要**少而准**：命中只留最直接的一两条，相关只留真正相邻的几条。
+    lines.push(
+      '这是**具体问题**，要的是少而准：match 最多 2 条（只留最直接回答这个问题的那一两条，' +
+        '其余「沾边但没回答」的不要塞进来）；related 最多 3 条（真正的相邻背景条目）；其余一律 drop。',
+    )
+  } else {
+    lines.push('match 最多 2 条（这个方向上最直接的那几条）；related **不限条数** —— 凡是同一个主题、同一个领域、确实相关的都留下，不要为了"少给几条"把背景条目丢掉。')
+  }
+  lines.push(
+    '- 候选的**主题或领域和问题所在的技术方向明显不同**（比如问 C++ 却给出 MySQL / 分布式 / 网络 / 操作系统的条目）→ 一律 drop，别因为共享一个词（容器 / 内存 / 服务）就留下。',
+  )
   lines.push('宁可 drop，也不要把只是字面沾边的条目放进 match。')
+  // 2026-10-23 用户实测：问「RAII」时，库里的「内存泄漏」正文末尾提了一句 RAII，
+  // 模型就把它当成了 RAII 的答案 —— 方向词只是**在别处顺带提到**的条目不算这个方向的条目。
+  lines.push('- 问题里的方向词只出现在某条候选**正文里顺带提到**（标题/标签讲的是别的东西）→ 那条不算这个方向的答案，放 drop。')
+  // 明确允许「全空」：不给这个许可，模型会为了完成分类硬塞条目。
+  // 但别把它读成「related 越少越好」—— 同一领域的相邻知识点不算凑数。
+  lines.push('确实一条都不相关就三个数组都留空；但同一个领域的相邻知识点不算凑数，别为了"少给"而丢。')
+  lines.push('只输出 JSON，不要解释。')
   return lines.join('\n')
 }
 
@@ -175,18 +221,28 @@ export function normalizeVerdict(verdict, known) {
  * 没被模型提到的候选按「无关」处理（不塞进任何一组），这是精度优先的选择。
  * @param {object[]} hits 候选
  * @param {{match: Set<string>, related: Set<string>}} verdict 分类结果
- * @param {{limit?: number, maxRelated?: number}} [limits] 上限
+ * @param {{maxMatch?: number, maxRelated?: number}} [limits] 上限；不传就是都不限
  * @returns {{matched: object[], related: object[]}}
  */
 export function splitByVerdict(hits, verdict, limits = {}) {
-  const limit = Math.max(1, Number(limits.limit) || 3)
-  const maxRelated = Math.max(0, Number(limits.maxRelated ?? MAX_RELATED) || 0)
+  // 上限由调用方按「提问类型」给（见 MATCH_MODE）：
+  //   exact   —— 具体问题：命中只留最直接的一两条，相关只留真正相邻的几条（用户实测：皮命中太多）；
+  //   breadth —— 按方向分批（用户点名了几个方向）：命中每方向一两条，相关宽松不限。
+  // 不传上限就是都不限（历史行为）。
+  const maxMatch =
+    limits.maxMatch === undefined || limits.maxMatch === null
+      ? Infinity
+      : Math.max(0, Number(limits.maxMatch) || 0)
+  const maxRelated =
+    limits.maxRelated === undefined || limits.maxRelated === null
+      ? Infinity
+      : Math.max(0, Number(limits.maxRelated) || 0)
   const matched = []
   const related = []
   for (const hit of hits) {
     const id = String(hit.id ?? '')
     if (verdict.match.has(id)) {
-      if (matched.length < limit) matched.push(hit)
+      if (matched.length < maxMatch) matched.push(hit)
     } else if (verdict.related.has(id)) {
       if (related.length < maxRelated) related.push(hit)
     }
@@ -213,6 +269,20 @@ export function fallbackSplit(hits, limit, reason) {
 }
 
 /**
+ * 提问类型 → 命中/相关的条数策略。
+ *
+ * 2026-10-23 用户两次实测逼出来的分流：
+ *   · 具体问题（「什么是 LRU cache」）：命中要**少而准** —— 用户实测「明明有一个卡片比较合适、
+ *     完全够用，他还有很多的皮命中」，相关也别铺一堆。所以：命中 ≤2、相关 ≤3。
+ *   · 按方向分批（用户点名了几个方向：「STL、智能指针、RAII、C++11」）：命中每个方向一两条
+ *     （一共几条是合理的），相关是宽松档 —— 用户要「自然会有很多」。
+ */
+export const MATCH_MODE = {
+  exact: { maxMatch: 2, maxRelated: 3 },
+  breadth: { maxMatch: 2, maxRelated: Infinity },
+}
+
+/**
  * 判定模型输出是否可用，可用就切分。
  * @param {string} text 模型输出
  * @param {object[]} hits 候选
@@ -225,7 +295,14 @@ export function applyRerankText(text, hits, limits = {}) {
   if (!verdict) return fallbackSplit(hits, limits.limit, '模型返回的不是可用的分类结果')
   const split = splitByVerdict(hits, verdict, limits)
   if (!split.matched.length && !split.related.length) {
-    return fallbackSplit(hits, limits.limit, '模型把所有候选都判为无关')
+    // 模型明确判「候选全都无关」→ 尊重它，返回空。
+    //
+    // 以前这里退回本地排序的前 limit 条，理由是「别一张卡都没有」。代价是
+    // 「库里没有」这件事永远表达不出来：模型判得再准，界面也会硬塞 3 条字面匹配的
+    // 噪声（2026-10-23 用户实测：问 C++ 的问题，界面刷出 MySQL 的卡片）。
+    // 现在只有**重排没跑起来**（异常 / 解析失败 / 模型不可用）才回退本地排序，
+    // 重排跑起来了就按模型的判断来。
+    return { matched: [], related: [], used: true, reason: '模型判定候选全部无关' }
   }
   // 模型把答案都判成 related、match 一条没留：把分数最高的那条提到命中，
   // 否则界面上一张"命中"卡片都没有，用户会以为库里没这东西。
@@ -258,7 +335,8 @@ export async function rerankHits(input) {
   }
 
   const candidates = list.slice(0, RERANK_CANDIDATES)
-  const prompt = buildRerankPrompt(query, candidates)
+  const mode = limits.mode === 'exact' ? 'exact' : 'breadth'
+  const prompt = buildRerankPrompt(query, candidates, mode)
   let result
   try {
     result = await call(ctx, {

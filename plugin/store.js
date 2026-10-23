@@ -18,7 +18,9 @@
 //   - 「整体库」不单独存一份，而是扫描全部主题库得到，因此永远不会与主题库不一致。
 //   - JSONL：可 grep、可 diff、可手改、可备份，几千条以内性能足够。
 
+import crypto from 'node:crypto'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 import { rankDocs, jaccard, tokenSet, tokenize, entryTokenSet, tokenSetWithCompounds, createRanker } from './rank.js'
@@ -70,15 +72,182 @@ export function normalizeSource(source) {
   }
 }
 
+/**
+ * 待处理状态（预览指纹 / 待写入批次 / 待确认提议）的**落盘位置**。
+ *
+ * 为什么必须落盘（2026-10-23 用户实测：「同意，出卡片预览」这个按钮一直失败）：
+ * 这三张表原来是进程内内存。只要宿主把两个半侧当成两个模块实例加载（或者用户
+ * 在「模型提议」和「点同意」之间重启了 DSH），工具半侧登记的提议，UI 半侧就查不到，
+ * 按钮永远报「这条提议已经过期」。写进 <root>/.pending.json 之后，谁读谁写都是同一份，
+ * 重启后也还在（TTL 仍然生效）。
+ */
+function pendingFile() {
+  const override = process.env.DSH_LEARN_ROOT
+  const root =
+    override && override.trim()
+      ? path.resolve(override.trim())
+      : path.join(
+          process.env.DSH_HOME && process.env.DSH_HOME.trim()
+            ? process.env.DSH_HOME.trim()
+            : path.join(os.homedir(), '.dsh'),
+          'learn',
+        )
+  return path.join(root, '.pending.json')
+}
+
+/** 读整份待处理状态；坏文件当空处理（绝不能因为一个 JSON 坏了把检索带崩）。 */
+function readPending() {
+  try {
+    const raw = fs.readFileSync(pendingFile(), 'utf8')
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/** 写整份待处理状态；失败静默（磁盘满/权限问题不该让工具调用报错）。 */
+function writePending(state) {
+  try {
+    const file = pendingFile()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify(state))
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/**
+ * 「先预览再写入」的进程级状态。
+ *
+ * 为什么必须放在模块级、而不是 store 实例里：
+ * 工具半侧（plugin/tools.js 的 apply）和 UI 半侧（plugin/index.js 的 store()）
+ * 各自 createStore 一次，是两个互不相干的实例。指纹记在实例里的话，
+ * 「预览」发生在工具侧、「确认写入」发生在 UI 侧 —— 闸门会误判成「没预览过」，
+ * 界面上那个「确认写入 N 条」按钮就永远写不进去。
+ * 批次登记表同理：预览时登记 batchId，UI 侧按 batchId 取回内容落盘。
+ */
+
+/** 预览指纹的存活时间：10 分钟。 */
+const PREVIEW_TTL_MS = 10 * 60 * 1000
+/** 待写入批次的存活时间：30 分钟。 */
+const SAVE_BATCH_TTL_MS = 30 * 60 * 1000
+/** 提议的存活时间：30 分钟。 */
+const PROPOSAL_TTL_MS = 30 * 60 * 1000
+/** 最近预览过的写入内容（指纹 → 时间），用于强制「先预览再写入」。 */
+const previews = new Map()
+
+/**
+ * 登记一批「预览过、等你点头」的内容。
+ * @param {object} batch { topicArg, slug, cards, sessionId }
+ * @returns {string} batchId（一次性，写完即作废）
+ */
+export function registerSaveBatch(batch) {
+  const nowMs = Date.now()
+  const state = readPending()
+  const batches = state.batches && typeof state.batches === 'object' ? state.batches : {}
+  for (const [id, item] of Object.entries(batches)) {
+    if (!item || nowMs - Number(item.at || 0) > SAVE_BATCH_TTL_MS) delete batches[id]
+  }
+  const batchId = 'b_' + nowMs.toString(36) + '_' + Math.random().toString(36).slice(2, 8)
+  batches[batchId] = { ...batch, at: nowMs }
+  state.batches = batches
+  writePending(state)
+  return batchId
+}
+
+/** 取一批待写入内容；不存在或已过期返回 null。 */
+export function getSaveBatch(batchId) {
+  const id = String(batchId || '').trim()
+  if (!id) return null
+  const state = readPending()
+  const batches = state.batches && typeof state.batches === 'object' ? state.batches : {}
+  const batch = batches[id]
+  if (!batch) return null
+  if (Date.now() - Number(batch.at || 0) > SAVE_BATCH_TTL_MS) {
+    delete batches[id]
+    state.batches = batches
+    writePending(state)
+    return null
+  }
+  return batch
+}
+
+/** 写完（或作废）就把这批删掉：batchId 是一次性的。 */
+export function dropSaveBatch(batchId) {
+  const id = String(batchId || '').trim()
+  if (!id) return
+  const state = readPending()
+  const batches = state.batches && typeof state.batches === 'object' ? state.batches : {}
+  if (batches[id]) {
+    delete batches[id]
+    state.batches = batches
+    writePending(state)
+  }
+}
+
+/**
+ * 「提议补条目」的登记表（2026-10-23）。
+ *
+ * 为什么单独一张表：提议时**只有标题和理由**，正文要等用户点了「同意」才生成 ——
+ * 生成正文是一次真实的模型调用，不能提前烧。所以提议先登记，用户同意后按
+ * proposalId 取回标题，再写正文、落成待写入批次。
+ *
+ * 登记在 .pending.json 里（不是进程内存）：工具半侧登记、UI 半侧按 id 取回，
+ * 两个半侧可能是两个模块实例 —— 2026-10-23 用户实测「同意，出卡片预览」一直失败，
+ * 就是这个原因。
+ */
+/** 登记一条提议，返回 proposalId。 */
+export function registerProposal(proposal) {
+  const nowMs = Date.now()
+  const state = readPending()
+  const items = state.proposals && typeof state.proposals === 'object' ? state.proposals : {}
+  for (const [id, item] of Object.entries(items)) {
+    if (!item || nowMs - Number(item.at || 0) > PROPOSAL_TTL_MS) delete items[id]
+  }
+  const proposalId = 'p_' + nowMs.toString(36) + '_' + Math.random().toString(36).slice(2, 8)
+  items[proposalId] = { ...proposal, at: nowMs }
+  state.proposals = items
+  writePending(state)
+  return proposalId
+}
+
+/** 取一条提议；不存在或已过期返回 null。 */
+export function getProposal(proposalId) {
+  const id = String(proposalId || '').trim()
+  if (!id) return null
+  const state = readPending()
+  const items = state.proposals && typeof state.proposals === 'object' ? state.proposals : {}
+  const proposal = items[id]
+  if (!proposal) return null
+  if (Date.now() - Number(proposal.at || 0) > PROPOSAL_TTL_MS) {
+    delete items[id]
+    state.proposals = items
+    writePending(state)
+    return null
+  }
+  return proposal
+}
+
+/** 作废一条提议（同意或放弃之后都该删掉）。 */
+export function dropProposal(proposalId) {
+  const id = String(proposalId || '').trim()
+  if (!id) return
+  const state = readPending()
+  const items = state.proposals && typeof state.proposals === 'object' ? state.proposals : {}
+  if (items[id]) {
+    delete items[id]
+    state.proposals = items
+    writePending(state)
+  }
+}
+
 export function createStore(root) {
   const topicsDir = path.join(root, 'topics')
   const bindingsFile = path.join(root, 'bindings.json')
   const settingsFile = path.join(root, 'settings.json')
   const backupsDir = path.join(root, 'backups')
   const cache = new Map()
-  /** 最近预览过的写入内容（hash → 时间），用于强制「先预览再写入」 */
-  const previews = new Map()
-  const PREVIEW_TTL_MS = 10 * 60 * 1000
   /** 每个主题保留几份日备份（审计 P0-2） */
   const BACKUP_KEEP = 7
 
@@ -303,6 +472,41 @@ export function createStore(root) {
     return stat ? Math.round(stat.mtimeMs) : 0
   }
 
+  /** 一批条目按领域计数（降序）：主题列表里的「这个主题有什么」用它。 */
+  function domainCounts(entries, topicDomain = '') {
+    const counts = new Map()
+    for (const entry of entries || []) {
+      // 条目没标领域时用主题的 domain 兜底（主题本身就是一个领域）
+      const domain = String(entry.appliesTo || topicDomain || '').trim()
+      if (!domain) continue
+      counts.set(domain, (counts.get(domain) || 0) + 1)
+    }
+    return Array.from(counts, ([value, count]) => ({ value, count })).sort(
+      (a, b) => b.count - a.count || a.value.localeCompare(b.value),
+    )
+  }
+
+  /** 一批条目按标签计数（降序）：领域没标的主题靠它让模型认出来。 */
+  function tagCounts(entries) {
+    const counts = new Map()
+    for (const entry of entries || []) {
+      for (const tag of entry.tags || []) {
+        const key = String(tag).trim()
+        if (!key) continue
+        counts.set(key, (counts.get(key) || 0) + 1)
+      }
+    }
+    return Array.from(counts, ([value, count]) => ({ value, count })).sort(
+      (a, b) => b.count - a.count || a.value.localeCompare(b.value),
+    )
+  }
+
+  /** 主题级领域：条目没标 appliesTo 时用它兜底（主题本身就是一个领域）。 */
+  function topicDomain(slug) {
+    if (!slug) return ''
+    return String(readMeta(slug).domain || '').trim()
+  }
+
   function listTopics() {
     ensureRoot()
     const out = []
@@ -311,14 +515,28 @@ export function createStore(root) {
       const slug = item.name
       const meta = readMeta(slug)
       const entries = readEntries(slug)
+      const active = entries.filter(entry => (entry.status || 'active') === 'active')
       out.push({
         slug,
         name: meta.name || slug,
         description: meta.description || '',
+        // 主题级领域（2026-10-23 用户定）：条目没标 appliesTo 时用它兜底 ——
+        // 「mysql-进阶 主题里的知识点，领域就是 MySQL」。
+        domain: meta.domain || '',
         keywords: Array.isArray(meta.keywords) ? meta.keywords : [],
         aliases: Array.isArray(meta.aliases) ? meta.aliases : [],
         count: entries.length,
-        activeCount: entries.filter(entry => (entry.status || 'active') === 'active').length,
+        activeCount: active.length,
+        // 这个主题里都有哪些领域（各多少条）。
+        //
+        // 为什么加：2026-10-23 用户问「STL、智能指针、RAII、C++11 的相关知识点」，
+        // 而会话绑的是 mysql-进阶 —— 模型**不知道 C++ 的条目在哪个主题**，
+        // 只能把每个主题都列一遍（实测 128 + 123 = 251 张卡片刷屏）。
+        // 有了这份分布，一次 learn_topics 就能定位到「面试」主题的 C++ 37 条，
+        // 然后只枚举那一个主题 + 那一个领域，不用整库倒。
+        domains: domainCounts(active, meta.domain || '').slice(0, 8),
+        // 领域没标的主题（比如 mysql-进阶）靠标签让模型认出来
+        tags: tagCounts(active).slice(0, 6),
         createdAt: meta.createdAt || null,
         updatedAt: meta.updatedAt || null,
       })
@@ -364,6 +582,9 @@ export function createStore(root) {
     const keywords = Array.isArray(meta.keywords)
       ? meta.keywords.map(k => String(k).trim()).filter(Boolean).slice(0, 12)
       : existing.keywords || []
+    // 主题级领域：不填就沿用已有的；传空字符串表示清除
+    const domain =
+      meta.domain === undefined ? existing.domain || '' : String(meta.domain || '').trim()
 
     if (existing.name) {
       if (existing.name !== display) {
@@ -372,6 +593,8 @@ export function createStore(root) {
       }
       if (description) existing.description = description
       if (keywords.length) existing.keywords = keywords
+      if (domain) existing.domain = domain
+      else delete existing.domain
       existing.updatedAt = now()
       writeMeta(slug, existing)
     } else {
@@ -380,6 +603,7 @@ export function createStore(root) {
         slug,
         description,
         keywords,
+        ...(domain ? { domain } : {}),
         aliases: [],
         createdAt: now(),
         updatedAt: now(),
@@ -432,6 +656,20 @@ export function createStore(root) {
   function writeSettings(settings) {
     // 设置文件和知识库一样不能写一半：走原子写（审计 P0-1 同一套）
     atomicWriteFile(settingsFile, JSON.stringify(settings, null, 2))
+  }
+
+  /**
+   * 要不要给模型提供「改 / 删条目」的工具（learn_update / learn_delete）。
+   *
+   * 默认**不提供**（2026-10-23 用户定）：工具的 schema 每次请求都随 tools 一起发，
+   * 改/删两个工具加起来约 1200 字 ≈ 900 tokens；而用户明确说「我不说要删改条目」。
+   * 想临时开：改 settings.json 的 kbEditTools=true，或用环境变量 DSH_KB_EDIT=1。
+   *
+   * @returns {boolean}
+   */
+  function getKbEditTools() {
+    if (String(process.env.DSH_KB_EDIT || '').trim() === '1') return true
+    return readSettings().kbEditTools === true
   }
 
   /** 设置/清除默认主题（新会话未绑定时用它） */
@@ -1125,27 +1363,163 @@ export function createStore(root) {
     throw new Error(`找不到条目 ${id}`)
   }
 
-  /** 列出条目，支持按状态/类型/标签过滤。 */
-  function listEntries({ topic, sessionId, limit, status, kind, tag }) {
+  /**
+   * 领域值归一：大小写、全半角空格、前后空白都不算差别。
+   * 库里同一族写成 "C++" / "C++14/17" / "c++" 都出现过，不归一就等于查不到。
+   */
+  function normDomain(value) {
+    return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '')
+  }
+
+  /**
+   * 把入参变成一组「领域针」。
+   * 支持字符串、数组、逗号分隔；空值返回空数组（= 不按领域过滤）。
+   */
+  function domainNeedles(spec) {
+    const raw = Array.isArray(spec) ? spec : String(spec ?? '').split(',')
+    return raw.map(normDomain).filter(Boolean)
+  }
+
+  /**
+   * 领域匹配：完全相等，或条目值包含针（"C++" 能捞到 "C++14/17"）。
+   *
+   * 为什么要「包含」：库里没有受控词表，"C++" 和 "C++14/17" 是同一个族的两条。
+   * 精确相等会让问 "C++" 的人看不到 C++14/17 —— 正是 2026-10-23 用户踩到的那个坑。
+   * 反向不成立（针是 "C++14/17" 时不会捞到 "C++"），所以这是「向下兼容」的单向匹配。
+   */
+  function matchDomain(entryDomain, needles) {
+    if (!needles.length) return true
+    const value = normDomain(entryDomain)
+    if (!value) return false
+    return needles.some(needle => value === needle || value.includes(needle))
+  }
+
+  /** 出处页码：p.9-10 → 9。没有 locator 的排到最后。 */
+  function locatorPage(source) {
+    const hit = String(source?.locator || '').match(/\d+/)
+    return hit ? Number(hit[0]) : Number.MAX_SAFE_INTEGER
+  }
+
+  /**
+   * 主题画像：领域分布 + 标签分布（都按数量降序）。
+   *
+   * 给模型的「目录」：不知道库里有哪些领域值，它就只能瞎猜一个标签 —— 这就是
+   * 「问 C++ 却只拿到 tag=C++ 的 34 条」的另一半原因。有了清单它自己就能判断
+   * "C语言 13" 要不要一起捞，不用插件硬编码族表。
+   */
+  function buildFacets(entries, topicDomain = '') {
+    const domains = new Map()
+    const tags = new Map()
+    let unscoped = 0
+    for (const entry of entries) {
+      if ((entry.status || 'active') !== 'active') continue
+      // 条目没标领域时用主题的 domain 兜底（主题本身就是一个领域）
+      const domain = String(entry.appliesTo || topicDomain || '').trim()
+      if (domain) domains.set(domain, (domains.get(domain) || 0) + 1)
+      else unscoped++
+      for (const tag of entry.tags || []) {
+        const key = String(tag).trim()
+        if (key) tags.set(key, (tags.get(key) || 0) + 1)
+      }
+    }
+    const sortDesc = map =>
+      Array.from(map, ([value, count]) => ({ value, count })).sort(
+        (a, b) => b.count - a.count || a.value.localeCompare(b.value),
+      )
+    return { appliesTo: sortDesc(domains), tags: sortDesc(tags), unscoped }
+  }
+
+  /**
+   * 关键词查询拆成「词」。
+   *
+   * 为什么要有：2026-10-23 用户问「STL、智能指针、RAII、C++11 新特性的相关知识点」，
+   * 模型要把相关条目**列出来**。但 learn_entries 当时只能按状态/类型/标签/领域过滤，
+   * **没有任何按文字收窄的口子** —— 想给「相关的那些」，模型只能把整个主题列出来
+   * （实测两个主题 251 条全刷成了卡片），或者改用 learn_search（那是排序答案，不是清单）。
+   * 拆词后按「命中任一词」过滤，用户点名的几个方向都能被列全。
+   *
+   * 分隔符：中英文逗号、顿号、分号、竖线、斜杠、空白。
+   */
+  function queryTerms(spec) {
+    const raw = Array.isArray(spec)
+      ? spec.map(item => String(item ?? ''))
+      : String(spec ?? '').split(/[、，,;；|/]+|\s+/)
+    return raw.map(term => term.trim().toLowerCase()).filter(Boolean)
+  }
+
+  /** 条目的可检索文本：标题、正文、标签、适用范围、问题原文。 */
+  function entryHaystack(entry) {
+    return [
+      entry.title,
+      entry.body,
+      (entry.tags || []).join(' '),
+      entry.appliesTo,
+      entry.q,
+    ]
+      .map(part => String(part ?? '').toLowerCase())
+      .join(' ')
+  }
+
+  /** 列出条目，支持按状态/类型/标签/领域/关键词过滤。 */
+  function listEntries({ topic, sessionId, limit, status, kind, tag, appliesTo, query }) {
     const slug = topic ? slugify(topic) : currentTopic(sessionId)
     if (!slug) {
       throw new Error('当前会话没有绑定主题：先调用 learn_topics(action="create"|"use") 指定主题')
     }
     const entries = readEntries(slug)
+    // 主题本身就是一个领域（2026-10-23 用户定）：条目没标 appliesTo 时，用主题的 domain 兜底。
+    // 理由：不是所有文件 / 临时加的知识都能提取出领域，但「mysql-进阶 主题里的东西属于 MySQL」
+    // 这件事总是成立的 —— 否则按领域收窄会把整个主题清空。
+    const topicDomain = readMeta(slug).domain || ''
     const wanted = status || 'active'
+    const needles = domainNeedles(appliesTo)
+    const terms = queryTerms(query)
     const filtered = entries.filter(entry => {
       const entryStatus = entry.status || 'active'
       if (wanted !== 'all' && entryStatus !== wanted) return false
       if (kind && (entry.kind || 'point') !== kind) return false
       if (tag && !(entry.tags || []).includes(tag)) return false
+      if (!matchDomain(entry.appliesTo || topicDomain, needles)) return false
+      // 关键词过滤：命中任一词即可（用户点名的几个方向要都能列到）
+      if (terms.length) {
+        const hay = entryHaystack(entry)
+        if (!terms.some(term => hay.includes(term))) return false
+      }
       return true
     })
-    const max = Number.isInteger(limit) && limit > 0 ? limit : filtered.length
+    // 每个词各命中多少条：模型靠它回答「库里有没有 RAII」这种问题
+    const termStats = terms.map(term => {
+      const needle = term.toLowerCase()
+      const count = entries.filter(entry => {
+        const entryStatus = entry.status || 'active'
+        if (wanted !== 'all' && entryStatus !== wanted) return false
+        return entryHaystack(entry).includes(needle)
+      }).length
+      return { term, count }
+    })
+    // 有出处页码时按页码排 —— 清单出来就是原始文档顺序，分块和原文一致，
+    // 模型照着分节就行，不用自己再归类一遍。没有页码的语料保持原顺序不变。
+    const ordered = filtered.some(entry => locatorPage(entry.source) !== Number.MAX_SAFE_INTEGER)
+      ? filtered
+          .slice()
+          .sort(
+            (a, b) =>
+              locatorPage(a.source) - locatorPage(b.source) ||
+              String(a.title || '').localeCompare(String(b.title || '')),
+          )
+      : filtered
+    const max = Number.isInteger(limit) && limit > 0 ? limit : ordered.length
     return {
       topic: slug,
-      total: filtered.length,
+      topicDomain: topicDomain || null,
+      total: ordered.length,
+      topicTotal: entries.filter(entry => (entry.status || 'active') === wanted || wanted === 'all').length,
       brokenLines: entries.broken || 0,
-      entries: filtered.slice(0, max).map(entry => ({
+      facets: buildFacets(entries, topicDomain),
+      // 关键词过滤时：模型要知道每个方向各命中几条（RAII 0 条 = 库里真没有）
+      terms: terms.length ? terms : null,
+      termStats: terms.length ? termStats : null,
+      entries: ordered.slice(0, max).map(entry => ({
         id: entry.id,
         kind: entry.kind || 'point',
         status: entry.status || 'active',
@@ -1174,6 +1548,8 @@ export function createStore(root) {
     getDefaultTopic,
     getAiModel,
     setAiModel,
+    // 改 / 删条目的工具默认不暴露给模型（省 schema；用户明确说不需要）
+    getKbEditTools,
     markPreviewed,
     hasPreviewed,
     planSave,
@@ -1186,5 +1562,16 @@ export function createStore(root) {
     deleteEntry,
     restoreEntry,
     listEntries,
+    // 领域匹配的三件套：检索层（tools.js 的 learn_search）也要用同一套归一规则，
+    // 否则「按领域列清单」和「按领域检索」会对同一份数据给出不同答案。
+    normDomain,
+    domainNeedles,
+    matchDomain,
+    // 主题级领域：条目没标 appliesTo 时用主题的 domain 兜底（主题本身就是一个领域）
+    topicDomain,
+    locatorPage,
+    // 关键词过滤：检索层和清单层共用同一套拆词规则
+    queryTerms,
+    entryHaystack,
   }
 }

@@ -8,6 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
 const problems = []
+// 工具 description / 参数说明也进模型的提示词 —— 关键规则可能放在那里
+const toolPromptText = []
 
 function fail(message) {
   problems.push(message)
@@ -81,6 +83,17 @@ function checkToolSchemas(mod) {
     fail('插件没有注册任何工具')
     return
   }
+  // 工具的 description / 参数说明也是模型看得见的提示词，
+  // 关键规则挪到那里以后，关键规则的检查要一并覆盖（见下方 marker 检查）。
+  for (const definition of captured.values()) {
+    toolPromptText.push(String(definition.description || ''))
+    for (const value of Object.values(definition.parameters?.properties || {})) {
+      toolPromptText.push(String(value.description || ''))
+      for (const item of value.items?.properties ? Object.values(value.items.properties) : []) {
+        toolPromptText.push(String(item.description || ''))
+      }
+    }
+  }
   for (const [toolName, definition] of captured) {
     const schema = definition.parameters
     if (!schema || schema.type !== 'object' || !schema.properties || !Object.keys(schema.properties).length) {
@@ -115,13 +128,50 @@ const required = [
   'scope=auto',
   '写库只用 learn_save',
   '确认框',
+  // 2026-10-23：写入改成「先预览、用户点头再写」，persona 必须说清落盘方式
+  '确认写入',
+  // 2026-10-23：回答里漏出条目 id、把命中列成目录（用户实测「用户想要知道这些编号吗」）
+  '不要出现条目 id',
+  '先定位、再枚举',
+  // 2026-10-23：定位主题靠主题列表里的领域分布（整库倒出来会刷 251 张卡）
+  '先 learn_topics',
+  // 2026-10-23：提议要显眼（用结构化提问，别埋在正文最后一行）；
+  // 「库里有」和「库里没有」要分开写（用户实测：混在一起效果不好）
+  'ask_user_question',
+  '「库里有」和「库里没有」要分开写',
+  // 2026-10-23：回答文本太挤、满屏代码片（用户实测「简直看不下去」）
+  '回答排版',
+  '不要给普通词套反引号',
+  // 分点靠列表而不是散文（软换行会合并成空格），出处标记要跟卡片标题对上
+  '分点用 markdown 列表',
+  '跟卡片对得上号',
+  // 2026-10-23：每个卡片分小点、不省字；工具调用全部做完再写回答（否则被折进过程组），
+  // 但也不能因为怕折叠就既不提议也不出卡片
+  '一张卡片 = 一个粗体小标题',
+  '卡片里没有的内容单独一条小点',
+  '工具调用全部做完，最后写回答',
+  '别跳过这步直接说「不补」',
+  // 2026-10-23：模型把「X、Y 的相关知识点」当成清单题，用 learn_entries 倒出 39 条
+  '先分清用户要的是什么',
+  '不是枚举题',
+  // 2026-10-23：模型把方向改写成更窄的词分头检索，点名的智能指针 / RAII / STL 组件全被挤出候选池
+  '不要自己把方向改写成更窄的词',
+  // 2026-10-23：主题没标领域时传 appliesTo 会把整个主题清零 → 退化成别处的皮命中
+  '传 appliesTo 前先确认这个主题有没有领域',
+  // 2026-10-23 用户：领域只用来筛范围性问题，具体问题不许先猜领域
+  '具体问题不要传 appliesTo',
+  // 2026-10-23：具体问题命中最多 2 条、相关最多 3 条（用户实测「皮命中太多」）
+  '具体问题要的是少而准',
   // 2026-10-22：回答里自发补了一张大对照表，用户要求「这类展开只出现在 AI 校验补充里」
   '不许自发改写',
   '对照表',
   '3 句以内',
 ]
 for (const marker of required) {
-  if (!patch.includes(marker)) fail(`persona 缺少关键规则：${marker}`)
+  // 规则可能在 persona 里，也可能在工具 description 里（同一事实只说一次）
+  if (!patch.includes(marker) && !toolPromptText.some(text => text.includes(marker))) {
+    fail(`persona 缺少关键规则：${marker}`)
+  }
 }
 
 // 3. 文件工具不要与宿主 dsh-ops 重复挂载
@@ -364,7 +414,7 @@ if (!toolsSource.includes('kbTokens')) {
   if (!clientText.includes("'tool.call.toolview'")) {
     fail('client/index.js 没有注册 tool.call.toolview：对话里的工具结果不会出现知识卡片')
   }
-  for (const key of ['learn_search', 'learn_save']) {
+  for (const key of ['learn_search', 'learn_save', 'learn_entries']) {
     if (!clientText.includes(`key: '${key}'`)) {
       fail(`client/index.js 没有为 ${key} 注册工具卡片视图`)
     }

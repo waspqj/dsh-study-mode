@@ -9,7 +9,7 @@ import path from 'node:path'
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-plugin-'))
 process.env.DSH_LEARN_ROOT = root
 
-const { apply, name, inject } = await import('../plugin/tools.js')
+const { apply, name, inject, DENY_TOOLS } = await import('../plugin/tools.js')
 
 let passed = 0
 async function check(label, fn) {
@@ -51,15 +51,29 @@ const ctx = {
     }
   },
 }
+// 这组用例要覆盖改 / 删条目的工具 → 显式打开（默认不暴露给模型，见 tools-schema 用例）
+process.env.DSH_KB_EDIT = '1'
 apply(ctx, {})
 
 console.log('工具注册')
-await check('注册了 6 个工具', async () => {
+await check('注册了 7 个工具', async () => {
   assert.deepEqual(
     Array.from(registered.keys()).sort(),
-    ['learn_delete', 'learn_entries', 'learn_save', 'learn_search', 'learn_topics', 'learn_update'],
+    ['learn_delete', 'learn_entries', 'learn_propose', 'learn_save', 'learn_search', 'learn_topics', 'learn_update'],
   )
 })
+// 工具 description / 参数说明也是模型看得见的提示词 —— 关键规则可以放在那里
+const toolPromptText = () =>
+  Array.from(registered.values())
+    .map(
+      tool =>
+        String(tool.description || '') +
+        ' ' +
+        Object.values(tool.parameters?.properties || {})
+          .map(param => String(param.description || ''))
+          .join(' '),
+    )
+    .join('\n')
 await check('每个工具都有 schema 与 execute', async () => {
   for (const tool of registered.values()) {
     assert.equal(typeof tool.description, 'string')
@@ -93,7 +107,7 @@ await check('按关键词模糊查找主题', async () => {
   assert.equal(result.found.slug, 'mysql-进阶')
 })
 
-console.log('写入：确认闸门')
+console.log('写入：先预览再写（2026-10-23 用户要流程）')
 let entryId = ''
 const card = {
   title: '间隙锁',
@@ -102,12 +116,19 @@ const card = {
   source: { type: 'file', ref: '课件第 5 页', locator: 'p.5' },
   appliesTo: 'MySQL 8.0',
 }
-await check('确认通道不可用时 learn_save 降级为预览、不落盘', async () => {
+await check('默认只出预览、不写库（用户先看到内容再决定）', async () => {
   const result = await save.execute({ cards: [card] }, exec)
   assert.equal(result.status, 'preview')
   assert.equal(result.dryRun, true)
   assert.equal(result.plan[0].action, 'create')
+  assert.ok(result.batchId, '预览要给出 batchId —— 界面上的「确认写入」按钮靠它')
   assert.equal(entries.execute({}, exec).total, 0, '预览不应写盘')
+})
+await check('预览过之后带 approved=true 能落盘（按钮不可用时的降级路径）', async () => {
+  const result = await save.execute({ approved: true, cards: [card] }, exec)
+  assert.equal(result.status, 'written')
+  assert.equal(result.total, 1)
+  entryId = entries.execute({}, exec).entries[0].id
 })
 await check('没预览过的内容带 approved=true 会被拒', async () => {
   await assert.rejects(
@@ -115,25 +136,45 @@ await check('没预览过的内容带 approved=true 会被拒', async () => {
     /还没有预览过/,
   )
 })
-await check('审批放行时一次调用就写盘', async () => {
+await check('mode=commit 时弹宿主确认框，用户点了就写盘', async () => {
   approvalOutcome = 'allowed-once'
   const before = approvalCalls.length
-  const result = await save.execute({ cards: [card] }, exec)
+  // 写进单独的主题：不污染主主题的条目计数（后面几条用例在数它）
+  const result = await save.execute(
+    { cards: [{ title: '确认框样例', body: '讲的是刷脏页的机制。' }], topic: '确认框测试主题', mode: 'commit' },
+    exec,
+  )
   assert.equal(result.status, 'written')
-  assert.equal(result.total, 1)
   assert.equal(approvalCalls.length, before + 1, '应弹过一次确认框')
-  assert.match(approvalCalls[approvalCalls.length - 1].reason, /间隙锁/, '确认框里应显示卡片标题')
+  assert.match(approvalCalls[approvalCalls.length - 1].reason, /确认框样例/, '确认框里应显示卡片标题')
   assert.equal(approvalCalls[approvalCalls.length - 1].toolName, 'learn_save')
-  entryId = entries.execute({}, exec).entries[0].id
   approvalOutcome = 'unavailable'
 })
-await check('用户拒绝时库不落盘', async () => {
+await check('确认框里带正文首行（用户看得见内容才敢点头）', async () => {
+  // 用「拒绝」触发：确认框照样弹、照样有内容，但一条也不落盘
+  approvalOutcome = 'rejected'
+  await save.execute(
+    { cards: [{ title: '带正文的卡', body: '首行是结论：这样写用户才看得懂。\n- 要点一' }], mode: 'commit' },
+    exec,
+  )
+  const reason = approvalCalls[approvalCalls.length - 1].reason
+  assert.match(reason, /首行是结论：这样写用户才看得懂。/, '确认框里应能看到正文首行')
+  approvalOutcome = 'unavailable'
+})
+await check('mode=commit 且用户拒绝时库不落盘', async () => {
   approvalOutcome = 'rejected'
   const before = entries.execute({}, exec).total
-  const result = await save.execute({ cards: [{ title: '被拒的卡片', body: '正文' }] }, exec)
+  const result = await save.execute({ cards: [{ title: '被拒的卡片', body: '正文' }], mode: 'commit' }, exec)
   assert.equal(result.status, 'rejected')
   assert.equal(entries.execute({}, exec).total, before, '拒绝后库不能变')
   approvalOutcome = 'unavailable'
+})
+await check('mode=commit 但确认框不可用时降级成预览、不落盘', async () => {
+  approvalOutcome = 'unavailable'
+  const before = entries.execute({}, exec).total
+  const result = await save.execute({ cards: [{ title: '降级的卡片', body: '正文' }], mode: 'commit' }, exec)
+  assert.equal(result.status, 'preview')
+  assert.equal(entries.execute({}, exec).total, before, '降级也不能写盘')
 })
 await check('入库条目带出处类型/核实标记/适用范围', async () => {
   const entry = entries.execute({}, exec).entries[0]
@@ -273,13 +314,31 @@ console.log('重排缓存（审计 P1-5）')
 const originalGet = ctx.get
 let modelCalls = 0
 let mockMatchId = ''
+let lastPrompt = ''
+// 按方向分批重排的用例要「每个方向各判自己池里的第一条」，这里给个开关
+let fakePerDirection = false
+// 贪心模型：把所有候选都判成命中/相关（用户实测「皮命中太多」的极端情况）
+let fakeGreedy = false
+const fakePrompts = []
 ctx.get = (serviceName) => {
   if (serviceName === 'llm') {
     return {
-      stream() {
+      stream(input) {
         modelCalls++
+        try {
+          lastPrompt = String(input && input.messages[0] && input.messages[0].content[0].text || '')
+        } catch {
+          lastPrompt = ''
+        }
+        fakePrompts.push(lastPrompt)
+        const ids = [...lastPrompt.matchAll(/id=([^\s《]+)/g)].map(match => match[1])
+        const verdict = fakeGreedy
+          ? { match: ids.slice(0, 4), related: ids.slice(4), drop: [] }
+          : fakePerDirection
+            ? { match: ids.slice(0, 1), related: ids.slice(1, 3), drop: ids.slice(3) }
+            : { match: mockMatchId ? [mockMatchId] : [], related: [], drop: [] }
         return (async function* () {
-          yield { type: 'text-delta', text: JSON.stringify({ match: mockMatchId ? [mockMatchId] : [], related: [], drop: [] }) }
+          yield { type: 'text-delta', text: JSON.stringify(verdict) }
           yield { type: 'finish', reason: { kind: 'stop' } }
         })()
       },
@@ -326,6 +385,328 @@ await check('知识库一改，缓存自动作废（会重新调模型）', asyn
   await save.execute({ approved: true, cards: [card] }, cacheExec)
   await search.execute({ query: '缓存测试卡片', scope: 'all' }, cacheExec)
   assert.equal(modelCalls, before + 1, '知识库改过之后应该重新调模型')
+})
+
+// ------------------------------------------------- 多方向检索：按方向分批问模型
+// 2026-10-23 用户两次反馈：
+//   ① 「一次调用塞 4 个方向 + 16 条候选」实测不准 —— 函数重载 / inline / this 指针被当成命中；
+//   ② 「如果不只 4 个方向，那你数量永远是 16，这就不对」。
+// 定案：方向有几个就调几次模型，每个方向只用用户自己的词（不改写）。
+console.log('多方向检索：按方向分批问模型')
+await check('四个方向 → 调四次模型，每个方向的提示词里就是那个方向的原词', async () => {
+  const dirExec = { agent: { id: 'sess-dirs' } }
+  topics.execute({ action: 'create', name: '方向测试' }, dirExec)
+  const cards = [
+    { title: 'STL 组件与容器分类', body: '容器 算法 迭代器 仿函数 适配器 分配器', appliesTo: 'C++' },
+    { title: '万能引用完美转发与智能指针', body: 'shared_ptr unique_ptr 引用折叠', appliesTo: 'C++' },
+    { title: 'RAII 资源管理思想', body: '构造获取资源 析构释放资源', appliesTo: 'C++' },
+    { title: 'C++11新特性与左值右值', body: '右值引用 移动语义', appliesTo: 'C++' },
+  ]
+  await save.execute({ cards }, dirExec)
+  await save.execute({ approved: true, cards }, dirExec)
+  mockMatchId = ''
+  fakePrompts.length = 0
+  fakePerDirection = true
+  const result = await search.execute(
+    { query: 'STL、智能指针、RAII、C++11 新特性', topic: '方向测试', limit: 4 },
+    dirExec,
+  )
+  fakePerDirection = false
+  assert.equal(fakePrompts.length, 4, '四个方向应该各调一次模型，实际 ' + fakePrompts.length + ' 次')
+  const asked = fakePrompts.map(prompt => (prompt.match(/用户问题：(.+)/) || [, ''])[1].trim())
+  assert.deepEqual(asked, ['STL', '智能指针', 'RAII', 'C++11 新特性'], '每次只问一个方向，而且用原词')
+  const titles = result.hits.map(hit => hit.title)
+  for (const title of cards.map(card => card.title)) {
+    assert.ok(titles.includes(title), '每个方向的条目都要出现在命中里：' + title)
+  }
+  // 逐方向结果：模型和用户都要能看出「哪个方向有、哪个没有」
+  assert.ok(Array.isArray(result.directions), '要给出逐方向结果')
+  assert.deepEqual(
+    result.directions.map(item => item.direction),
+    ['STL', '智能指针', 'RAII', 'C++11 新特性'],
+  )
+  for (const item of result.directions) assert.ok(item.matched >= 1, item.direction + ' 应该有命中')
+})
+
+await check('有的方向库里有、有的没有时，工具文本要逐方向说清楚（不能拿沾边的冒充）', async () => {
+  // 2026-10-23 用户自己删掉两条来测的正是这个场景：混着发的时候，
+  // 以前整段糊成一片，模型只能拿字面沾边的顶上。
+  const mixedExec = { agent: { id: 'sess-mixed' } }
+  topics.execute({ action: 'create', name: '混合测试' }, mixedExec)
+  const cards = [{ title: 'RAII 资源管理思想', body: '构造获取资源 析构释放资源', appliesTo: 'C++' }]
+  await save.execute({ cards }, mixedExec)
+  await save.execute({ approved: true, cards }, mixedExec)
+  mockMatchId = ''
+  fakePrompts.length = 0
+  fakePerDirection = true
+  const result = await search.execute(
+    { query: 'RAII、量子计算', topic: '混合测试', appliesTo: 'C++', limit: 3 },
+    mixedExec,
+  )
+  fakePerDirection = false
+  const text = search.output.render({}, result)[0].text
+  assert.match(text, /RAII：命中 1 条/, '有命中的方向要报出来')
+  assert.match(text, /量子计算：库里没有对应条目/, '没有的方向要如实说没有')
+  assert.match(text, /不要拿"最接近的那条"冒充答案/, '要提醒模型别拿沾边的冒充')
+  const raii = result.hits.find(hit => hit.title === 'RAII 资源管理思想')
+  assert.ok(raii, '有的那个方向照常出卡片')
+})
+
+console.log('多方向检索：独立条目判定 / 补池 / 并行（2026-10-23 用户实测：相关只有 1 条、思考 2 分钟）')
+
+await check('方向词只在别的条目正文里顺带提到 → 不算这个方向的独立条目', async () => {
+  const indepExec = { agent: { id: 'sess-indep' } }
+  topics.execute({ action: 'create', name: '独立判定' }, indepExec)
+  const cards = [
+    // 标题里没有 RAII，只在正文里提了一句 —— 不该被当成 RAII 的条目
+    { title: 'C语言与C++的区别', body: 'C++ 标准库引入了 STL、智能指针、RAII 等特性。', appliesTo: 'C++' },
+    { title: 'RAII 资源管理思想', body: '构造获取资源 析构释放资源', appliesTo: 'C++' },
+  ]
+  await save.execute({ cards }, indepExec)
+  await save.execute({ approved: true, cards }, indepExec)
+  mockMatchId = ''
+  fakePrompts.length = 0
+  fakePerDirection = true
+  const result = await search.execute(
+    { query: 'RAII、C语言与C++的区别', topic: '独立判定', appliesTo: 'C++', limit: 3 },
+    indepExec,
+  )
+  fakePerDirection = false
+  const byDirection = result.directions || []
+  const raii = byDirection.find(item => item.direction === 'RAII')
+  assert.ok(raii, '要逐方向给出结果')
+  assert.equal(raii.independent, true, '标题里就是 RAII → 有独立条目')
+})
+
+await check('方向有独立条目时，池子里要补上同领域、标签相近的条目（相关才多起来）', async () => {
+  const padExec = { agent: { id: 'sess-pad' } }
+  topics.execute({ action: 'create', name: '补池测试' }, padExec)
+  const cards = [
+    { title: 'STL 组件与容器分类', body: '容器 算法 迭代器 仿函数 适配器 分配器', tags: ['C++', 'STL', '迭代器'], appliesTo: 'C++' },
+    { title: 'vector迭代器失效问题', body: '底层空间一换，旧迭代器就失效', tags: ['C++', '迭代器'], appliesTo: 'C++' },
+    { title: '完全无关的条目', body: '讲的是缓冲池刷脏页的机制', tags: ['mysql'], appliesTo: 'MySQL' },
+  ]
+  await save.execute({ cards }, padExec)
+  await save.execute({ approved: true, cards }, padExec)
+  mockMatchId = ''
+  fakePrompts.length = 0
+  fakePerDirection = true
+  // 补池只作用在「按方向分批」这条路径上（多方向提问），单方向的具体问题不补，避免噪声
+  await search.execute({ query: 'STL、智能指针', topic: '补池测试', appliesTo: 'C++', limit: 3 }, padExec)
+  fakePerDirection = false
+  const stlPrompt = fakePrompts.find(prompt => /用户问题：STL/.test(prompt))
+  assert.ok(stlPrompt, '要有问 STL 的那次调用')
+  assert.match(stlPrompt, /vector迭代器失效问题/, '同标签的同领域条目要补进池子，模型才能挑出 related')
+  assert.ok(!/完全无关的条目/.test(stlPrompt), '别的领域的条目不该进来')
+})
+
+await check('多个方向是并行问模型的（串行 4 次要思考 2 分钟）', async () => {
+  const parExec = { agent: { id: 'sess-par' } }
+  topics.execute({ action: 'create', name: '并行测试' }, parExec)
+  const cards = [
+    { title: 'STL 组件与容器分类', body: '容器 算法 迭代器', tags: ['STL'], appliesTo: 'C++' },
+    { title: '万能引用完美转发与智能指针', body: 'shared_ptr unique_ptr', tags: ['智能指针'], appliesTo: 'C++' },
+    { title: 'RAII 资源管理思想', body: '构造获取 析构释放', tags: ['RAII'], appliesTo: 'C++' },
+    { title: 'C++11新特性与左值右值', body: '右值引用 移动语义', tags: ['C++11'], appliesTo: 'C++' },
+  ]
+  await save.execute({ cards }, parExec)
+  await save.execute({ approved: true, cards }, parExec)
+  mockMatchId = ''
+  fakePrompts.length = 0
+  fakePerDirection = true
+  const started = Date.now()
+  await search.execute({ query: 'STL、智能指针、RAII、C++11 新特性', topic: '并行测试', appliesTo: 'C++', limit: 4 }, parExec)
+  fakePerDirection = false
+  const elapsed = Date.now() - started
+  assert.equal(fakePrompts.length, 4, '四个方向各问一次')
+  assert.ok(elapsed < 150, '四个方向要并行，不能串行（串行 4 次约 2 分钟），实测 ' + elapsed + 'ms')
+})
+
+// ------------------------------------------------- 具体问题要少而准（2026-10-23 用户实测）
+// 「我搜索一个问题，但是他给我匹配了很多卡片，明明有一个卡片是比较合适的，完全够用，
+//   他还有很多的皮命中了。很多卡片，而且还有很多相关知识点」
+console.log('具体问题：命中要少而准')
+await check('主题本身就是领域：条目没标 appliesTo 时用主题的 domain 兜底', async () => {
+  // 2026-10-23 用户定：「不能依赖领域，不是所有的文件或者临时加的知识都能提取到领域，
+  // 某种程度上来说主题就是一种领域，那么 mysql-进阶 主题的知识点的领域都是 mysql 就行了」
+  const exec2 = { agent: { id: 'sess-topic-domain' } }
+  topics.execute({ action: 'create', name: '主题领域测试', domain: 'MySQL' }, exec2)
+  const cards = [
+    { title: '间隙锁是什么', body: '锁住索引记录之间的间隙，阻止插入' },
+    { title: '死锁是怎么发生的', body: '两个事务互相等对方释放锁' },
+  ]
+  await save.execute({ cards }, exec2)
+  await save.execute({ approved: true, cards }, exec2)
+  mockMatchId = ''
+  fakeGreedy = true
+  // 范围性问题（「MySQL 有哪些」）才该按领域收窄
+  const scopeQuery = await search.execute(
+    { query: 'MySQL 有哪些', topic: '主题领域测试', appliesTo: 'MySQL', limit: 5 },
+    exec2,
+  )
+  // 具体问题不按领域收窄（领域要先猜，猜错就把答案过滤掉）
+  const specific = await search.execute(
+    { query: '间隙锁是什么', topic: '主题领域测试', appliesTo: 'MySQL', limit: 5 },
+    exec2,
+  )
+  fakeGreedy = false
+  assert.equal(scopeQuery.appliesToApplied, 'mysql', '范围性问题要真按领域收窄')
+  assert.equal(specific.appliesToApplied, null, '具体问题不按领域收窄')
+  assert.match(specific.note, /具体问题/, '要说清为什么没按领域筛')
+  assert.ok(specific.hits.some(hit => hit.title === '间隙锁是什么'), '具体问题要能找到答案')
+
+  const list = topics.execute({ action: 'list' }, exec2)
+  const topic = list.topics.find(item => item.slug === '主题领域测试')
+  assert.equal(topic.domain, 'MySQL', '主题列表要带上主题领域')
+  assert.deepEqual(topic.domains.map(item => item.value), ['MySQL'], '领域分布要用主题领域兜底')
+})
+
+await check('领域收窄不能把当前主题清空（没标领域的条目要照样能搜到）', async () => {
+  // 2026-10-23 用户实测的真凶：mysql-进阶 的条目一条都没标 appliesTo，
+  // 模型传了 appliesTo="MySQL" → 当前主题被过滤成 0 条 → 检索退到别的主题的 9 条皮命中。
+  // 现在：范围性问题才会走收窄；收窄后清空了就回退并在 note 里说明。
+  const exec2 = { agent: { id: 'sess-fallback' } }
+  topics.execute({ action: 'create', name: '没标领域的主题' }, exec2)
+  const cards = [
+    { title: '间隙锁是什么', body: '锁住索引记录之间的间隙，阻止插入' },
+    { title: '死锁是怎么发生的', body: '两个事务互相等对方释放锁' },
+  ]
+  await save.execute({ cards }, exec2)
+  await save.execute({ approved: true, cards }, exec2)
+  mockMatchId = ''
+  fakePrompts.length = 0
+  fakeGreedy = true
+  const result = await search.execute(
+    { query: 'MySQL 有哪些', topic: '没标领域的主题', appliesTo: 'MySQL', limit: 5 },
+    exec2,
+  )
+  fakeGreedy = false
+  assert.ok(
+    result.hits.some(hit => hit.title === '间隙锁是什么'),
+    '没标领域的条目也要能被搜到（收窄清空主题时要回退）',
+  )
+  assert.equal(result.appliesToApplied, null, '收窄没生效时要如实说没生效')
+  assert.match(result.note, /既没有标领域、也没设主题领域/, '并且要说清楚为什么回退')
+})
+
+await check('具体问题下命中最多 2 条、相关最多 3 条（贪心模型也不行）', async () => {
+  const exec2 = { agent: { id: 'sess-exact' } }
+  topics.execute({ action: 'create', name: '精确测试' }, exec2)
+  const cards = [
+    { title: '间隙锁是什么', body: '锁住索引记录之间的间隙，阻止插入', appliesTo: 'MySQL' },
+    { title: '临键锁', body: '记录锁 + 间隙锁', appliesTo: 'MySQL' },
+    { title: 'next-key lock', body: '记录锁加间隙锁', appliesTo: 'MySQL' },
+    { title: '插入意向锁', body: '插入前加的锁', appliesTo: 'MySQL' },
+    { title: '记录锁', body: '锁住索引记录本身', appliesTo: 'MySQL' },
+    { title: '自增锁', body: 'auto_increment 相关', appliesTo: 'MySQL' },
+  ]
+  await save.execute({ cards }, exec2)
+  await save.execute({ approved: true, cards }, exec2)
+  mockMatchId = ''
+  fakePrompts.length = 0
+  fakeGreedy = true
+  const result = await search.execute(
+    { query: '间隙锁是什么', topic: '精确测试', appliesTo: 'MySQL', limit: 6 },
+    exec2,
+  )
+  fakeGreedy = false
+  assert.ok(result.hits.length <= 2, '命中最多 2 条，实际 ' + result.hits.length)
+  assert.ok(result.related.length <= 3, '相关最多 3 条，实际 ' + result.related.length)
+  assert.ok(result.hits.some(hit => hit.title === '间隙锁是什么'), '最直接的那条要在')
+})
+
+await check('领域补全只在「问的就是这个领域」时做，具体问题不补皮命中', async () => {
+  const exec2 = { agent: { id: 'sess-pad2' } }
+  topics.execute({ action: 'create', name: '补全测试' }, exec2)
+  const cards = [
+    { title: 'C++ 领域条目一', body: '讲 C++ 的某一点', appliesTo: 'C++' },
+    { title: 'C++ 领域条目二', body: '讲 C++ 的另一点', appliesTo: 'C++' },
+    { title: 'C++ 领域条目三', body: '讲 C++ 的第三点', appliesTo: 'C++' },
+  ]
+  await save.execute({ cards }, exec2)
+  await save.execute({ approved: true, cards }, exec2)
+  mockMatchId = ''
+  fakeGreedy = false
+  fakePerDirection = true
+  const domainQuery = await search.execute({ query: 'C++', topic: '补全测试', appliesTo: 'C++', limit: 3 }, exec2)
+  const specific = await search.execute({ query: '讲 C++ 的某一点是什么', topic: '补全测试', appliesTo: 'C++', limit: 3 }, exec2)
+  fakePerDirection = false
+  assert.ok(
+    domainQuery.hits.some(hit => hit.padded),
+    '问领域本身时要把该领域的条目补齐',
+  )
+  assert.ok(
+    !specific.hits.some(hit => hit.padded),
+    '具体问题不能补皮命中',
+  )
+})
+
+// ------------------------------------------------- persona（预设里的行为规则）
+// 2026-10-23 用户实测反馈的两点，都落在 persona 上：
+//   ① 提议补条目的那行文字太不显眼 → 改用 ask_user_question 结构化提问
+//   ② 「库里有」和「库里没有」的文本混在一起 → 要求分开写
+// persona 改坏了这里没人会发现，所以钉两条。
+console.log('persona：提议要显眼、库里有/没有要分开')
+const personaText = fs.readFileSync(path.join(import.meta.dirname, '..', 'cordis.patch.yml'), 'utf8')
+await check('persona 写了「提议要用 ask_user_question 问」', async () => {
+  assert.match(personaText, /ask_user_question/, 'persona 必须点名用结构化提问，别让模型只在正文里问一句')
+  assert.match(personaText, /太不显眼/, '要留着这条理由，防止以后被当成多余的话删掉')
+})
+await check('persona 写了「库里有」和「库里没有」要分开写', async () => {
+  assert.match(personaText, /「库里有」和「库里没有」要分开写/)
+})
+await check('persona 提醒 ask_user_question 超时不算同意', async () => {
+  assert.match(personaText, /就是没同意/, '没同意就不能往下写卡片')
+})
+await check('预设里挂着 ask_user_question 工具行（persona 点名要用它）', async () => {
+  assert.match(personaText, /@deepseek-ai\/dsh-tool-ask-user/, '预设里没有这个工具行，persona 就是空指令')
+})
+await check('deny 列表没有把 ask_user_question 限掉', async () => {
+  assert.ok(!DENY_TOOLS.includes('ask_user_question'), '提议提问要能调用')
+})
+
+// 2026-10-23 用户实测：「文本太挤，还有各种代码块，简直看不下去」
+// 根因是 markdown 单个换行会被合并成空格，模型一行一行写就坨成一块。
+await check('persona 写了回答排版：靠空行分段', async () => {
+  assert.match(personaText, /回答排版/, '缺排版规则')
+  assert.match(personaText, /单个换行合并成空格/, '要说清为什么必须用空行')
+  assert.match(personaText, /空一行/, '要给出具体的分段写法')
+})
+await check('persona 要求分点用列表、重点用粗体（用户要「分点 + 突出重点」）', async () => {
+  assert.match(personaText, /分点用 markdown 列表/, '散文靠软换行会坨成一段，列表不会')
+  assert.match(personaText, /粗体关键词/, '每条小点要粗体点出关键词')
+})
+await check('persona 要求「一张卡片 = 小标题 + 2-4 条小点」，不省字', async () => {
+  assert.match(personaText, /一张卡片 = 一个粗体小标题/, '用户要每个卡片分小点')
+  assert.match(personaText, /不用省文本/, '要写清这不是省字的场景')
+  assert.match(personaText, /卡片里没有的内容单独一条小点/, '库里没有的要单独一条，别混进卡片小点')
+})
+await check('persona 要求工具调用做完再写回答（否则被折进过程组）', async () => {
+  assert.match(personaText, /工具调用全部做完，最后写回答/)
+  assert.match(personaText, /回答之后又调工具/, '要说清折叠的触发条件')
+  assert.match(personaText, /折进「过程」里/, '要把机制说清楚，模型才知道为什么')
+})
+await check('persona 不许因为怕折叠就既不提议也不出卡片（2026-10-23 回归）', async () => {
+  assert.match(personaText, /发现库里缺东西/, '缺东西要提议')
+  assert.match(personaText, /别跳过这步直接说「不补」/, '不能跳过 learn_save 预览')
+  assert.match(personaText, /不要因为怕折叠就既不问也不出卡片/, '这条是用户实测踩出来的')
+})
+await check('persona 要求出处标记跟卡片标题对上号', async () => {
+  assert.match(personaText, /跟卡片对得上号/)
+  assert.match(personaText, /标题照抄卡片标题/, '用户要靠标题去下面找对应那张卡')
+})
+await check('persona 不许回答正文套反引号 / 用代码块围栏', async () => {
+  assert.match(personaText, /不要给普通词套反引号/, '不然后满屏灰底代码片')
+  assert.match(personaText, /不要用代码块围栏/, '缺这条模型会用 ``` 把内容包起来')
+  assert.match(personaText, /回答正文里用粗体或纯文字/, '要给出替代写法')
+})
+await check('persona 区分「要条目全集」和「要内容」（2026-10-23 实测 39 条噪声）', async () => {
+  // 2026-10-23 之后：要内容的题也**不要**自己拆成四次检索（拆的时候会把方向改写窄），
+  // 改成原句直传，由 learn_search 内部按「、」拆方向各召回再合池。
+  // 规则可能落在 persona，也可能落在工具 description（同一事实只说一次）—— 两边都算。
+  const promptText = personaText + '\n' + toolPromptText()
+  assert.match(promptText, /别把一次检索拆成多次调用|枚举题和要内容的题都别把一次检索拆成四次/)
+  assert.match(promptText, /原句一次交给 learn_search/, '要内容的题也是原句一次，不许自己改写方向')
 })
 
 fs.rmSync(root, { recursive: true, force: true })

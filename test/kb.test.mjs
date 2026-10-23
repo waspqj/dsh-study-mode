@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createStore, normalizeSource, normalizeTitle, slugify } from '../plugin/store.js'
-import { jaccard, rankDocs, tokenize, tokenSet, createRanker } from '../plugin/rank.js'
+import { jaccard, rankDocs, tokenize, tokenSet, createRanker, splitQuerySegments } from '../plugin/rank.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-test-'))
 const store = createStore(root)
@@ -364,7 +364,46 @@ check('createRanker 反复检索互不影响', () => {
   assert.deepEqual(third, ['b'], '换一个查询结果应该跟着变')
 })
 
-// 插件自己的 AI 模型设置（2026-10-23「模型要能切换」）
+// 点名多个方向：2026-10-23 用户实测「STL、智能指针、RAII、C++11 新特性的相关知识点」
+// 返回的 10 张卡里一条智能指针、一条 RAII、一条 STL 组件都没有 ——
+// 模型把方向改写成更窄的词（STL → vector 迭代器）分头检索，点名的那几条直接被挤出候选池。
+console.log('多方向查询：拆开召回再合池')
+check('顿号分隔的方向会被拆开，尾部套话要摘掉', () => {
+  assert.deepEqual(splitQuerySegments('STL、智能指针、RAII、C++11 新特性的相关知识点'), [
+    'STL',
+    '智能指针',
+    'RAII',
+    'C++11 新特性',
+  ])
+  assert.deepEqual(splitQuerySegments('vector，list'), ['vector', 'list'])
+})
+check('普通问句不拆（没有分隔符就当一整句）', () => {
+  assert.deepEqual(splitQuerySegments('什么是 LRU cache'), [])
+  assert.deepEqual(splitQuerySegments('间隙锁是什么'), [])
+  assert.deepEqual(splitQuerySegments(''), [])
+})
+check('只有一个方向时也不拆', () => {
+  assert.deepEqual(splitQuerySegments('智能指针、智能指针'), [])
+})
+check('方向太多就不拆（免得把一句普通问句切碎）', () => {
+  assert.deepEqual(splitQuerySegments('a1、a2、a3、a4、a5、a6、a7'), [])
+})
+check('每个方向用自己的词召回，第一名就是该方向的条目（按方向分批的前提）', () => {
+  // 生产路径里 rerankByDirections 就是「每个方向各跑一次 rankDocs」，
+  // 所以这里钉住：方向词原样召回时，各自的第一名必须是对应条目。
+  const docs = [
+    { id: 'stl', title: 'STL 组件与容器分类', body: '容器 迭代器 算法 适配器', tags: ['STL'] },
+    { id: 'ptr', title: '智能指针与完美转发', body: 'shared_ptr unique_ptr 引用折叠', tags: ['智能指针'] },
+    { id: 'raii', title: 'RAII 资源管理思想', body: '构造获取 析构释放', tags: ['RAII'] },
+    { id: 'c11', title: 'C++11 新特性与左值右值', body: '右值引用 移动语义 auto', tags: ['C++11'] },
+    { id: 'misc', title: 'C语言与C++的区别', body: '面向过程 面向对象', tags: ['C++'] },
+  ]
+  const segments = splitQuerySegments('STL、智能指针、RAII、C++11 新特性')
+  assert.equal(segments.length, 4)
+  const tops = segments.map(seg => rankDocs(docs, seg, 1)[0]?.id)
+  assert.deepEqual(tops, ['stl', 'ptr', 'raii', 'c11'], '每个方向的第一名都要是自己的条目')
+})
+
 console.log('插件 AI 模型设置')
 check('默认跟随会话', () => {
   const pref = store.getAiModel()
@@ -393,6 +432,159 @@ check('fixed 缺 provider/model 要报错，不能存半截设置', () => {
   assert.throws(() => store.setAiModel({ mode: 'fixed', provider: '', model: 'x' }), /必须同时给出/)
   assert.throws(() => store.setAiModel({ mode: 'fixed', provider: 'p', model: '  ' }), /必须同时给出/)
   assert.equal(store.getAiModel().mode, 'session', '报错后不能留下坏设置')
+})
+
+console.log('按领域（appliesTo）列清单')
+// 2026-10-23 用户踩坑：问「C++ 的常考点」只拿到 tag=C++ 的 34 条，另外 17 条 C++ 相关的
+// 被 tag 的精确匹配物理删掉了。领域过滤是这件事的正解，这里把语义钉死。
+const domainSlug = store.createTopic('领域测试')
+store.planSave({
+  topic: domainSlug,
+  sessionId: 's-domain',
+  dryRun: false,
+  cards: [
+    { title: '虚函数表', body: '正文', appliesTo: 'C++', tags: ['C++', '多态'], source: { type: 'file', ref: 'a.pdf', locator: 'p.23' } },
+    { title: '智能指针', body: '正文', appliesTo: 'C++', tags: ['C++11', '智能指针'], source: { type: 'file', ref: 'a.pdf', locator: 'p.9' } },
+    { title: 'C++17 新特性', body: '正文', appliesTo: 'C++17', tags: ['新特性'], source: { type: 'file', ref: 'a.pdf', locator: 'p.11' } },
+    { title: '内存对齐', body: '正文', appliesTo: 'C语言', tags: ['C语言', '内存'], source: { type: 'file', ref: 'a.pdf', locator: 'p.7' } },
+    { title: 'epoll 原理', body: '正文', appliesTo: '网络', tags: ['epoll'], source: { type: 'file', ref: 'a.pdf', locator: 'p.40' } },
+    { title: '没有领域的条目', body: '正文', tags: ['杂项'], source: { type: 'user' } },
+  ],
+})
+
+check('领域值大小写/空格归一后再比较', () => {
+  assert.equal(store.normDomain('  C++  '), 'c++')
+  assert.equal(store.normDomain('C ++'), 'c++')
+})
+check('逗号分隔与数组两种写法等价', () => {
+  assert.deepEqual(store.domainNeedles('C++, C语言'), ['c++', 'c语言'])
+  assert.deepEqual(store.domainNeedles(['C++', 'C语言']), ['c++', 'c语言'])
+  assert.deepEqual(store.domainNeedles(''), [])
+  assert.deepEqual(store.domainNeedles(undefined), [])
+})
+check('appliesTo 传字符串只返回该领域（含同族写法）', () => {
+  const res = store.listEntries({ topic: domainSlug, appliesTo: 'C++' })
+  // C++ 两条 + C++17 一条（"C++" 包含于 "C++17"，同族单向兼容）
+  assert.equal(res.total, 3)
+  assert.ok(res.entries.every(e => String(e.appliesTo || '').startsWith('C++')))
+})
+check('appliesTo 传数组是「任一命中」的并集', () => {
+  const res = store.listEntries({ topic: domainSlug, appliesTo: ['C++', 'C语言'] })
+  assert.equal(res.total, 4, 'C++ 三条 + C语言 一条')
+})
+check('未标注领域的条目不会被领域过滤捞出来', () => {
+  const res = store.listEntries({ topic: domainSlug, appliesTo: 'C++' })
+  assert.ok(!res.entries.some(e => e.title === '没有领域的条目'))
+})
+check('不传 appliesTo 时行为不变', () => {
+  const res = store.listEntries({ topic: domainSlug })
+  assert.equal(res.total, 6)
+})
+check('清单按出处页码排（原始文档顺序）', () => {
+  const res = store.listEntries({ topic: domainSlug })
+  const pages = res.entries.map(e => store.locatorPage(e.source))
+  const known = pages.filter(p => p !== Number.MAX_SAFE_INTEGER)
+  assert.deepEqual(known, known.slice().sort((a, b) => a - b), '有页码的必须升序')
+})
+check('facets 给出领域与标签分布', () => {
+  const res = store.listEntries({ topic: domainSlug })
+  const cpp = res.facets.appliesTo.find(d => d.value === 'C++')
+  assert.equal(cpp.count, 2)
+  assert.equal(res.facets.unscoped, 1, '一条没填领域')
+  const tag = res.facets.tags.find(t => t.value === 'C++')
+  assert.equal(tag.count, 1)
+  assert.ok(res.facets.appliesTo.length >= 3)
+})
+
+// ---------------------------------------------------------------- 关键词收窄
+// 2026-10-23 用户实测：问「STL、智能指针、RAII、C++11 的相关知识点」，
+// learn_entries 当时没有任何按文字收窄的口子，模型只能把整个主题列出来
+// （实测两个主题 251 条全刷成卡片）。query 就是补这个口子。
+check('query 拆词：中英文逗号顿号分号斜杠空白都能分', () => {
+  assert.deepEqual(store.queryTerms('STL、智能指针、RAII、C++11'), ['stl', '智能指针', 'raii', 'c++11'])
+  assert.deepEqual(store.queryTerms('STL, 智能指针'), ['stl', '智能指针'])
+  assert.deepEqual(store.queryTerms('a|b/c d'), ['a', 'b', 'c', 'd'])
+  assert.deepEqual(store.queryTerms(''), [])
+})
+check('query 只列沾这些词的条目（命中任一即可）', () => {
+  const res = store.listEntries({ topic: domainSlug, query: '智能指针' })
+  assert.equal(res.total, 1)
+  assert.equal(res.entries[0].title, '智能指针')
+})
+check('query 多个方向取并集', () => {
+  const res = store.listEntries({ topic: domainSlug, query: '智能指针、epoll' })
+  assert.equal(res.total, 2)
+  assert.ok(res.entries.some(e => e.title === '智能指针'))
+  assert.ok(res.entries.some(e => e.title === 'epoll 原理'))
+})
+check('termStats 报出每个方向各命中几条（0 条 = 库里真没有）', () => {
+  const res = store.listEntries({ topic: domainSlug, query: '智能指针、RAII' })
+  const stats = Object.fromEntries(res.termStats.map(s => [s.term, s.count]))
+  assert.equal(stats['智能指针'], 1)
+  assert.equal(stats['raii'], 0, '库里没有 RAII，模型要能据此如实说没有')
+  assert.equal(res.terms.length, 2)
+})
+check('不带 query 时 termStats 为 null（不添乱）', () => {
+  const res = store.listEntries({ topic: domainSlug })
+  assert.equal(res.termStats, null)
+  assert.equal(res.terms, null)
+})
+check('query 与 appliesTo 可以叠加', () => {
+  const res = store.listEntries({ topic: domainSlug, query: '新特性', appliesTo: 'C++' })
+  assert.equal(res.total, 1)
+  assert.equal(res.entries[0].title, 'C++17 新特性')
+})
+
+// ---------------------------------------------------------------- 主题的领域画像
+// 定位「内容在哪个主题」用：会话绑的是 mysql-进阶，模型不知道 C++ 在「面试」，
+// 就把两个主题都列了一遍（251 张卡）。主题列表里带上领域分布就不用猜了。
+check('主题列表带领域分布（模型据此定位该查哪个主题）', () => {
+  const topic = store.listTopics().find(t => t.slug === domainSlug)
+  const cpp = topic.domains.find(d => d.value === 'C++')
+  assert.equal(cpp.count, 2)
+  assert.ok(topic.domains.find(d => d.value === '网络'), '其它领域也要在')
+})
+check('主题列表带标签分布（领域没标的主题靠它认出来）', () => {
+  const topic = store.listTopics().find(t => t.slug === domainSlug)
+  assert.ok(topic.tags.length > 0)
+  assert.ok(topic.tags.every(t => typeof t.value === 'string' && t.count >= 1))
+})
+
+
+// ---------------------------------------------------------------- 跨模块实例
+// 2026-10-23 用户实测：「同意，出卡片预览」这个按钮一直失败。
+// 根因是提议/批次登记在进程内存里，宿主把两个半侧当成两个模块实例加载时，
+// 工具侧登记的提议 UI 侧查不到。改成落盘 .pending.json 之后这里钉死。
+check('提议登记能跨模块实例取回（宿主两个半侧各读一份模块）', async () => {
+  const inst1 = await import('../plugin/store.js')
+  const inst2 = await import('../plugin/store.js?inst=2')
+  assert.notEqual(inst1, inst2, '查询串不同必须是两个模块实例，否则这条用例没意义')
+  const id = inst1.registerProposal({
+    topicArg: '跨实例主题',
+    slug: '跨实例主题',
+    topicName: '跨实例主题',
+    items: [{ title: 'RAII', why: '库里没有' }],
+    sessionId: null,
+  })
+  const back = inst2.getProposal(id)
+  assert.ok(back, '另一个实例必须能取回 —— 否则「同意」按钮永远报「已过期」')
+  assert.equal(back.items[0].title, 'RAII')
+  inst1.dropProposal(id)
+  assert.equal(inst2.getProposal(id), null, '作废之后两边都该查不到')
+})
+check('待写入批次也能跨模块实例取回', async () => {
+  const inst1 = await import('../plugin/store.js')
+  const inst2 = await import('../plugin/store.js?inst=3')
+  const batchId = inst1.registerSaveBatch({
+    topicArg: '跨实例主题',
+    slug: '跨实例主题',
+    cards: [{ title: 'X', body: 'y' }],
+    sessionId: null,
+  })
+  const back = inst2.getSaveBatch(batchId)
+  assert.ok(back, '另一个实例要能取到这批卡片，不然「确认写入」也点不动')
+  assert.equal(back.cards[0].title, 'X')
+  inst1.dropSaveBatch(batchId)
 })
 
 fs.rmSync(root, { recursive: true, force: true })
