@@ -434,6 +434,55 @@ await check('生成的卡片能按批次写进库', async () => {
   assert.equal(list.json.total, 1)
 })
 
+await check('可以只写入其中一张，其余留在批次里（2026-10-24 用户：审批不能只能批量）', async () => {
+  const topicName = '单条审批测试'
+  const cards = [
+    { title: '第一条要写', body: '正文一，内容足够过校验。' + '详细说明'.repeat(5) },
+    { title: '第二条先不写', body: '正文二，内容足够过校验。' + '详细说明'.repeat(5) },
+  ]
+  // 预览指纹闸门：真实流程里 learn_save 预览时就登记了，这里直接建批次得自己登
+  createStore(root).markPreviewed(slugify(topicName), cards)
+  const batchId = registerSaveBatch({
+    topicArg: topicName,
+    slug: slugify(topicName),
+    cards,
+    sessionId: null,
+    similarCount: 0,
+    bypassDuplicate: true,
+  })
+  // 先按标题只写第一条
+  const first = await postTo(proposalHandler, '/save', { batchId, titles: ['第一条要写'] })
+  assert.equal(first.statusCode, 200, first.body)
+  assert.equal(first.json.written, 1)
+  assert.equal(first.json.remaining, 1, '还剩一条等确认')
+  let list = await get('/entries', '?topic=' + topicName)
+  assert.equal(list.json.total, 1, '只写进去一条')
+
+  // 批次还在 → 再写剩下那条
+  const second = await postTo(proposalHandler, '/save', { batchId, titles: ['第二条先不写'] })
+  assert.equal(second.statusCode, 200, second.body)
+  assert.equal(second.json.remaining, 0, '写完全部就没剩余了')
+  list = await get('/entries', '?topic=' + topicName)
+  assert.equal(list.json.total, 2, '两条都进去了')
+})
+
+await check('单条审批没选中任何一条时报 400', async () => {
+  const topicName = '单条审批空选'
+  const cards = [{ title: '一条', body: '正文，内容足够过校验。' + '详细说明'.repeat(5) }]
+  createStore(root).markPreviewed(slugify(topicName), cards)
+  const batchId = registerSaveBatch({
+    topicArg: topicName,
+    slug: slugify(topicName),
+    cards,
+    sessionId: null,
+    similarCount: 0,
+    bypassDuplicate: true,
+  })
+  const res = await postTo(proposalHandler, '/save', { batchId, titles: ['根本不存在'] })
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /至少/)
+})
+
 await check('不存在的提议 id 报 404 并说清怎么办', async () => {
   const res = await postTo(proposalHandler, '/propose/accept', { proposalId: 'p_没有这个' })
   assert.equal(res.statusCode, 404)

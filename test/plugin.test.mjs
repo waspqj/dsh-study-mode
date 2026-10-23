@@ -699,6 +699,23 @@ await check('提议时写的正文会存下来（点同意时直接出卡片，�
   assert.match(result.items[0].body, /长度字段/, '正文要跟着提议一起存')
 })
 
+await check('命中结果里要提醒「够了就停手」（每次工具往返都是一整个来回的 token）', async () => {
+  const exec2 = { agent: { id: 'sess-stop' } }
+  topics.execute({ action: 'create', name: '停手测试' }, exec2)
+  const cards = [{ title: '间隙锁是什么', body: '锁住索引记录之间的间隙，阻止插入', appliesTo: 'MySQL' }]
+  await save.execute({ cards }, exec2)
+  await save.execute({ approved: true, cards }, exec2)
+  mockMatchId = ''
+  fakeGreedy = false
+  const hit = await search.execute({ query: '间隙锁是什么', topic: '停手测试', appliesTo: 'MySQL', limit: 3 }, exec2)
+  const hitText = search.output.render({}, hit)[0].text
+  assert.match(hitText, /不要再调别的工具去补充/, '命中时要提醒停手')
+
+  const miss = await search.execute({ query: '量子纠缠塌缩', topic: '停手测试', appliesTo: 'MySQL', limit: 3 }, exec2)
+  const missText = search.output.render({}, miss)[0].text
+  assert.ok(!/不要再调别的工具去补充/.test(missText), '没命中时不能这么说（那会让人以为不用再查）')
+})
+
 // ------------------------------------------------- persona（预设里的行为规则）
 // 2026-10-23 用户实测反馈的两点，都落在 persona 上：
 //   ① 提议补条目的那行文字太不显眼 → 改用 ask_user_question 结构化提问
@@ -734,9 +751,12 @@ await check('persona 要求分点用列表、重点用粗体（用户要「分�
   assert.match(personaText, /分点用 markdown 列表/, '散文靠软换行会坨成一段，列表不会')
   assert.match(personaText, /粗体关键词/, '每条小点要粗体点出关键词')
 })
-await check('persona 要求「一张卡片 = 小标题 + 2-4 条小点」，不省字', async () => {
+await check('persona 要求「一张卡片 = 小标题 + 1-3 条小点」，并且要平衡成本', async () => {
+  // 2026-10-24 用户定：不再「不用省文本」——输出 token 按全价计费，成本和成效要平衡
   assert.match(personaText, /一张卡片 = 一个粗体小标题/, '用户要每个卡片分小点')
-  assert.match(personaText, /不用省文本/, '要写清这不是省字的场景')
+  assert.match(personaText, /1-3 条小点/, '每张卡最多三条小点')
+  assert.ok(!/不用省文本/.test(personaText), '那句「不用省文本」不要再出现在 persona 里')
+  assert.match(personaText, /成本和成效要平衡/, '要写清为什么不再要求长')
   assert.match(personaText, /卡片里没有的内容单独一条小点/, '库里没有的要单独一条，别混进卡片小点')
 })
 await check('persona 要求工具调用做完再写回答（否则被折进过程组）', async () => {

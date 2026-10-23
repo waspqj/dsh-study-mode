@@ -778,6 +778,56 @@ await check('第二次点击才真的 POST /delete', async () => {
   assert.deepEqual(call.body, { topic: 'mysql-进阶', id: 'k_1' })
 })
 
+await check('核实要确认：第一次点击只变成「确认核实？」，不发请求', async () => {
+  // 2026-10-24 用户要求：「核实按钮也要可以单独核实，核实需要确认」
+  forget()
+  const original = fixtures.entries.entries[0].verified
+  fixtures.entries.entries[0].verified = false
+  try {
+    calls.length = 0
+    const view = await run(Panel, {})
+    const button = findButton(view.tree, '核实')
+    assert.ok(button, '找不到单条核实按钮')
+    await button.props.onClick()
+    await sleep(20)
+    assert.equal(
+      calls.filter((item) => item.url.includes('/card/verify')).length,
+      0,
+      '第一次点击就把这条标成已核实了',
+    )
+    const confirming = await run(Panel, {})
+    assert.match(confirming.html, /确认核实？/)
+  } finally {
+    fixtures.entries.entries[0].verified = original
+  }
+})
+
+await check('第二次点击才真的 POST /card/verify（单条）', async () => {
+  forget()
+  const original = fixtures.entries.entries[0].verified
+  fixtures.entries.entries[0].verified = false
+  try {
+    const view = await run(Panel, {})
+    const button = findButton(view.tree, '核实')
+    assert.ok(button, '找不到单条核实按钮')
+    await button.props.onClick()
+    await sleep(20)
+    const armed = await run(Panel, {})
+    const confirm = findButton(armed.tree, '确认核实？')
+    assert.ok(confirm, '找不到确认核实按钮')
+    calls.length = 0
+    await confirm.props.onClick()
+    await sleep(20)
+    const call = calls.find((item) => item.url.includes('/kb/api/card/verify'))
+    assert.ok(call, '没有请求 /card/verify')
+    assert.equal(call.body.id, 'k_1')
+    assert.equal(call.body.state, 'verified')
+    assert.equal(call.body.by, 'user')
+  } finally {
+    fixtures.entries.entries[0].verified = original
+  }
+})
+
 console.log('新增表单')
 await check('点新增打开表单，含主题 / 类型 / 标题 / 正文 / 标签', async () => {
   const view = await run(Panel, {})
@@ -1883,6 +1933,42 @@ await check('提议条：每条能单独勾选，还能挑补到哪个主题（2
   assert.equal(posted.body.topic, 'mian-shi', '还要带上选中的主题')
 })
 
+await check('预览卡片展开后能单独写入（2026-10-24 用户：审批不能只能批量）', async () => {
+  forget()
+  const previewCard = {
+    id: null,
+    title: '为什么挥手需要四次',
+    body: '被动方要等自己的数据发完才发 FIN。',
+    role: 'new',
+    verified: false,
+    version: 1,
+    tags: ['TCP'],
+    topic: 'mian-shi',
+    topicName: '面试',
+  }
+  const props = {
+    turn: turnOf(
+      [{ seq: 12, cards: [previewCard], save: { batchId: 'b_one', count: 1, topic: 'mian-shi', topicName: '面试' } }],
+      20,
+    ),
+    seq: 20,
+  }
+  let view = await run(turnTailReg.Component, props)
+  // 折叠态没有按钮：先点开这张卡
+  const mini = find(view.tree, item => item.props && String(item.props.className || '').includes('kb-mini-card'))
+  assert.ok(mini, '要有折叠态的卡片')
+  await mini.props.onClick()
+  view = await run(turnTailReg.Component, props)
+  const writeOne = findButton(view.tree, '写入这条')
+  assert.ok(writeOne, '展开后要有「写入这条」')
+  const before = calls.length
+  await writeOne.props.onClick()
+  const posted = calls.slice(before).find(call => String(call.url).endsWith('/kb/api/save'))
+  assert.ok(posted, '单独写入也要调 /kb/api/save')
+  assert.deepEqual(posted.body.titles, ['为什么挥手需要四次'], '按标题只提交这一条')
+  assert.equal(posted.body.batchId, 'b_one')
+})
+
 await check('清单列出来的卡片不叫「命中」（2026-10-23 用户实测 251 张）', async () => {
   const listed = await run(turnTailReg.Component, {
     turn: turnOf([{ seq: 12, cards: [oneCard, relatedCard], source: 'entries' }], 20),
@@ -1898,6 +1984,7 @@ await check('清单列出来的卡片不叫「命中」（2026-10-23 用户实�
 })
 
 await check('有待写入批次时出现「确认写入 N 条」按钮', async () => {
+  forget() // 丢掉上一条用例留下的状态，从干净状态开始
   const props = {
     turn: turnOf([{ seq: 12, cards: [oneCard], save: { batchId: 'b_1', count: 3, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } }], 20),
     seq: 20,

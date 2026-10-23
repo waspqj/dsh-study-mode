@@ -187,6 +187,34 @@ export function dropSaveBatch(batchId) {
 }
 
 /**
+ * 只把一批里的一部分写成一批新的（其余留在原批次里等用户逐条确认）。
+ *
+ * 2026-10-24 用户要求：「审批只能批量，展开知识卡片后要可以单独审批」。
+ * batchId 保持不变，只是把已确认的那几条从里面摘出去 —— 界面按同一个 batchId
+ * 再渲染剩下的条目，用户接着一条条确认。
+ *
+ * @param {string} batchId 批次 id
+ * @param {object[]} remaining 剩下的条目（原批次里还没确认的）
+ * @returns {boolean} 是否更新成功（批次已过期 / 不存在返回 false）
+ */
+export function trimSaveBatch(batchId, remaining) {
+  const id = String(batchId || '').trim()
+  if (!id) return false
+  const state = readPending()
+  const batches = state.batches && typeof state.batches === 'object' ? state.batches : {}
+  const batch = batches[id]
+  if (!batch) return false
+  if (!Array.isArray(remaining) || !remaining.length) {
+    delete batches[id]
+  } else {
+    batches[id] = { ...batch, cards: remaining }
+  }
+  state.batches = batches
+  writePending(state)
+  return true
+}
+
+/**
  * 「提议补条目」的登记表（2026-10-23）。
  *
  * 为什么单独一张表：提议时**只有标题和理由**，正文要等用户点了「同意」才生成 ——

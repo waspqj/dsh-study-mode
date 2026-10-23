@@ -532,6 +532,14 @@ function renderHits(value) {
     lines.push('')
     lines.push(...renderHitBlock(hit))
   }
+  // 命中就够了就停手：每次工具往返都要重发整段上下文 + 一次思考，
+  // 多调一个工具就多一整个来回的钱（2026-10-24 用户按成本实测后要求的优化方向）。
+  if (value.hits.length) {
+    lines.push('')
+    lines.push(
+      '（这批命中已经能回答用户的问题了：直接按回答排版写答案就行，不要再调别的工具去补充 —— 每次工具往返都是一整个来回的 token。）',
+    )
+  }
   // 重排跑起来了但一条都没留：要说清是「没命中」而不是「没检索」，
   // 否则模型会再搜一遍（2026-10-23：全无关不再硬塞本地前 3 条）。
   if (!value.hits.length && !related.length && value.rerank?.used) {
@@ -842,8 +850,8 @@ async function runSave({ ctx, store, args, exec }) {
       status: 'preview',
       batchId,
       message:
-        '预览（未写入）。卡片已经摆出来了：用户可以在卡片下方点「确认写入」直接落库；' +
-        '用户口头同意的话，用 mode="commit" 且 approved=true 再调一次（内容要和这一批完全一致）。',
+        '预览（未写入）。卡片已经摆出来了：用户可以在卡片下方点「确认写入」整批落库，' +
+        '也可以展开其中一张逐条确认；用户口头同意的话，用 mode="commit" 且 approved=true 再调一次（内容要和这一批完全一致）。',
     }
   }
 

@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.19'
+    const UI_REV = '0.3.20'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -120,6 +120,9 @@ window.__ModuleLoader__.load({
         roleUpdate: '本次更新',
         rolePreview: '待写入',
         cardPendingNote: '还没进库',
+        // 预览卡片单独写入（2026-10-24 用户：审批不能只能批量）
+        cardWriteOne: '写入这条',
+        cardWritten: '已写入',
         cardCollapse: '收起',
         // 相关补充：点一行能看全文（2026-10-23 用户：「点开后没有卡片，只有文字，那也没有意义」）
         relOpenHint: '点开看全文',
@@ -213,6 +216,13 @@ window.__ModuleLoader__.load({
         verifySourceSave: '存为来源并核实',
         verifySelf: '① 我自己看着对',
         verifySelfBtn: '标为已核实',
+        // 核实前要确认（2026-10-24 用户要求）：第一次点只是「上膛」，再点一次才生效
+        verifyConfirmArm: '确认核实？',
+        verifyConfirmHint: '再点一次就标为已核实（4 秒内有效）',
+        verifyOne: '核实',
+        verifyDone: '已核实这条',
+        verifyBatch: '批量标为已核实',
+        verifyBatchConfirm: '确认核实',
         verifyAi: '② 先让 AI 查一遍',
         verifyAiBtn: '开始校验',
         verifyNoIssue: 'AI 没有发现事实性问题',
@@ -287,6 +297,8 @@ window.__ModuleLoader__.load({
         roleUpdate: 'Updated',
         rolePreview: 'Not saved',
         cardPendingNote: 'not in the library yet',
+        cardWriteOne: 'Write this one',
+        cardWritten: 'Written',
         cardCollapse: 'Collapse',
         relOpenHint: 'Open the full text',
         relCloseHint: 'Collapse this one',
@@ -375,6 +387,12 @@ window.__ModuleLoader__.load({
         verifySourceSave: 'Save source and verify',
         verifySelf: '① I checked it myself',
         verifySelfBtn: 'Mark as verified',
+        verifyConfirmArm: 'Confirm?',
+        verifyConfirmHint: 'Click again to mark verified (valid for 4 seconds)',
+        verifyOne: 'Verify',
+        verifyDone: 'Verified this one',
+        verifyBatch: 'Verify selected',
+        verifyBatchConfirm: 'Confirm verify',
         verifyAi: '② Let the AI check first',
         verifyAiBtn: 'Start review',
         verifyNoIssue: 'The AI found no factual problems',
@@ -467,6 +485,7 @@ window.__ModuleLoader__.load({
 .kb-card-acts{position:absolute;right:6px;bottom:5px;display:flex;gap:4px;padding:2px 3px;border-radius:6px;background:color-mix(in srgb,var(--kb-card) 92%,transparent);opacity:0;pointer-events:none;transition:opacity .12s ease}
 .kb-card:hover .kb-card-acts,.kb-card:focus-within .kb-card-acts{opacity:1;pointer-events:auto}
 .kb-mini{font:inherit;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--kb-line);border-radius:5px;padding:0 6px;cursor:pointer;white-space:nowrap}
+.kb-mini.primary{color:var(--dsw-alias-label-primary);border-color:color-mix(in srgb,var(--kb-accent) 55%,transparent);background:color-mix(in srgb,var(--kb-accent) 12%,transparent);font-weight:600}
 .kb-mini:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}
 .kb-mini.danger{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
 .kb-mini.danger:hover{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-bg-base)}
@@ -1174,7 +1193,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     }
 
     function EntryCard(props) {
-      const { entry, t, onOpen, onArchive, onRestore, onDelete, busy, score, coverage, selectable, selected, onToggle } = props
+      const { entry, t, onOpen, onArchive, onRestore, onDelete, onVerify, busy, score, coverage, selectable, selected, onToggle } = props
       const [confirming, setConfirming] = useState(false)
       const timer = useRef(null)
       const archived = entry.status === 'archived'
@@ -1256,6 +1275,16 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         h(
           'div',
           { className: 'kb-card-acts' },
+          // 单条核实（2026-10-24 用户要求：核实也要能一条条来，而且核实前要确认）
+          !archived && !entry.verified && onVerify
+            ? h(ConfirmButton, {
+                disabled: busy,
+                label: t('verifyOne'),
+                confirmLabel: t('verifyConfirmArm'),
+                hint: t('verifyConfirmHint'),
+                onConfirm: () => onVerify(entry),
+              })
+            : null,
           archived
             ? h('button', { className: 'kb-mini', disabled: busy, onClick: withStop(() => onRestore(entry)) }, t('restore'))
             : h(
@@ -1921,6 +1950,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 onArchive: (item) => mutate('/archive', { topic: item.topic, id: item.id }, t('archive')),
                 onRestore: (item) => mutate('/restore', { topic: item.topic, id: item.id }, t('restore')),
                 onDelete: (item) => mutate('/delete', { topic: item.topic, id: item.id }, t('remove')),
+                onVerify: (item) =>
+                  mutate('/card/verify', { id: item.id, topic: item.topic, state: 'verified', by: 'user' }, t('verifyDone')),
               }),
               ),
             ),
@@ -1932,11 +1963,14 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
               { className: 'kb-batch' },
               h('span', null, '已选 ' + picked.length + ' 条'),
               h('span', { className: 'kb-grow' }),
-              h(
-                'button',
-                { className: 'kb-btn primary', disabled: !picked.length || busyId === 'batch', onClick: batchVerify },
-                '批量标为已核实' + (picked.length ? ' (' + picked.length + ')' : ''),
-              ),
+              h(ConfirmButton, {
+                className: 'kb-btn primary',
+                disabled: !picked.length || busyId === 'batch',
+                label: t('verifyBatch') + (picked.length ? ' (' + picked.length + ')' : ''),
+                confirmLabel: t('verifyBatchConfirm') + ' ' + picked.length + ' ' + t('unitCards') + '？',
+                hint: t('verifyConfirmHint'),
+                onConfirm: batchVerify,
+              }),
               h(
                 'button',
                 {
@@ -2060,6 +2094,43 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     }
 
     /** 核实徽标：已核实显示绿勾，未核实可点。 */
+    /**
+     * 两步确认按钮：核实这类「改变结论状态」的动作不能一点就生效。
+     *
+     * 2026-10-24 用户要求：「核实需要确认」。
+     * 第一次点变成确认文案（4 秒内没再点就复原），第二次点才真的执行 ——
+     * 和删除按钮同一个交互习惯，用户不用学新东西。
+     */
+    function ConfirmButton(props) {
+      const { label, confirmLabel, hint = '', onConfirm, className = 'kb-mini', disabled = false, title = '' } = props
+      const [armed, setArmed] = useState(false)
+      const timer = useRef(null)
+      useEffect(
+        () => () => {
+          if (timer.current) clearTimeout(timer.current)
+        },
+        [],
+      )
+      const click = event => {
+        if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+        if (disabled) return
+        if (!armed) {
+          setArmed(true)
+          if (timer.current) clearTimeout(timer.current)
+          timer.current = setTimeout(() => setArmed(false), 4000)
+          return
+        }
+        if (timer.current) clearTimeout(timer.current)
+        setArmed(false)
+        if (onConfirm) onConfirm()
+      }
+      return h(
+        'button',
+        { className, disabled, onClick: click, title: armed ? hint : title },
+        armed ? confirmLabel : label,
+      )
+    }
+
     function VerifyBadge(props) {
       const { card, onToggle } = props
       if (card.verified) {
@@ -2628,11 +2699,14 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           h(
             'div',
             { className: 'kb-vsec-act' },
-            h(
-              'button',
-              { className: 'kb-vbtn primary', disabled: busy, onClick: () => mark('user', null) },
-              translate('verifySelfBtn'),
-            ),
+            h(ConfirmButton, {
+              className: 'kb-vbtn primary',
+              disabled: busy,
+              label: translate('verifySelfBtn'),
+              confirmLabel: translate('verifyConfirmArm'),
+              hint: translate('verifyConfirmHint'),
+              onConfirm: () => mark('user', null),
+            }),
           ),
         ),
 
@@ -2670,11 +2744,14 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 'div',
                 { className: 'kb-vsec-act' },
                 h('span', { className: 'kb-vok' }, translate('verifyNoIssue')),
-                h(
-                  'button',
-                  { className: 'kb-vbtn primary', disabled: busy, onClick: () => mark('ai-assisted', null) },
-                  translate('verifyNoIssueBtn'),
-                ),
+                h(ConfirmButton, {
+                  className: 'kb-vbtn primary',
+                  disabled: busy,
+                  label: translate('verifyNoIssueBtn'),
+                  confirmLabel: translate('verifyConfirmArm'),
+                  hint: translate('verifyConfirmHint'),
+                  onConfirm: () => mark('ai-assisted', null),
+                }),
               )
             : null,
           aiParseFailed
@@ -2723,11 +2800,14 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 })
               : null,
             showSource
-              ? h(
-                  'button',
-                  { className: 'kb-vbtn primary', disabled: busy || !source.trim(), onClick: () => mark('source', source.trim()) },
-                  translate('verifySourceSave'),
-                )
+              ? h(ConfirmButton, {
+                  className: 'kb-vbtn primary',
+                  disabled: busy || !source.trim(),
+                  label: translate('verifySourceSave'),
+                  confirmLabel: translate('verifyConfirmArm'),
+                  hint: translate('verifyConfirmHint'),
+                  onConfirm: () => mark('source', source.trim()),
+                })
               : null,
             showSource
               ? h('button', { className: 'kb-vbtn', onClick: () => setShowSource(false) }, translate('workCancel'))
@@ -3175,7 +3255,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
      * 否则收起态的卡片就不小了。
      */
     function ChatCard(props) {
-      const { card, onSaved, compact = false } = props
+      const { card, onSaved, compact = false, onWriteOne = null, writeState = '' } = props
       const [panel, setPanel] = useState('')
       // 预览默认收起；compact=false 的调用方（面板里的卡片）保持旧行为
       const [open, setOpen] = useState(!compact)
@@ -3281,6 +3361,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           h('span', { className: 'kb-grow' }),
           // 展开态给一个「收起」：用户看完正文要能收回去，否则卡片越滚越长
           // 没有 id 的卡片是「还没落盘」的预览：没有可操作的对象，就不给动作
+          // 但预览卡片要给**单独写入**（2026-10-24 用户要求：审批不能只能批量）
           card.id
             ? h(
                 'span',
@@ -3307,7 +3388,25 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 ),
                 h('button', { className: 'kb-mini', onClick: () => setPanel(panel === 'ask' ? '' : 'ask') }, translate('actAsk')),
               )
-            : h('span', { className: 'kb-work-note' }, translate('cardPendingNote')),
+            : onWriteOne
+              ? h(
+                  'span',
+                  { className: 'kb-work-row' },
+                  h(
+                    'button',
+                    {
+                      className: 'kb-mini primary',
+                      disabled: writeState === 'busy' || writeState === 'done',
+                      onClick: () => onWriteOne(card),
+                    },
+                    writeState === 'done'
+                      ? translate('cardWritten')
+                      : writeState === 'busy'
+                        ? translate('proposalGenerating')
+                        : translate('cardWriteOne'),
+                  ),
+                )
+              : h('span', { className: 'kb-work-note' }, translate('cardPendingNote')),
         ),
         panel === 'work' ? h(Workbench, { card, autoReview: true, onClose: () => setPanel(''), onSaved: update }) : null,
         panel === 'edit' ? h(Workbench, { card, autoReview: false, onClose: () => setPanel(''), onSaved: update }) : null,
@@ -3559,6 +3658,29 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         }
       }
 
+      // 单张预览卡片单独写入（2026-10-24 用户要求：审批不能只能批量）
+      // 键用标题：批次里的顺序可能变，标题是稳定的
+      const [writeOneState, setWriteOneState] = useState({})
+      // 还剩几条没确认：单独写入后要跟着减，不能一直显示「确认写入 3 条」
+      const [saveLeft, setSaveLeft] = useState(null)
+      const leftCount = saveLeft === null ? (save && save.count) || 0 : saveLeft
+      const writeOne = async card => {
+        if (!save || !save.batchId) return
+        const key = String(card.title || '')
+        setWriteOneState(state => ({ ...state, [key]: 'busy' }))
+        try {
+          const data = await apiPost('/save', { batchId: save.batchId, titles: [key] })
+          setWriteOneState(state => ({ ...state, [key]: 'done' }))
+          if (data && typeof data.remaining === 'number') setSaveLeft(data.remaining)
+          // 整批都确认完了 → 藏掉批量条，显示「已写入」
+          if (!data || !data.remaining) setSaveState({ busy: false, done: true, error: '' })
+        } catch (error) {
+          const message = error && error.message ? String(error.message) : String(error)
+          setWriteOneState(state => ({ ...state, [key]: '' }))
+          setSaveState({ busy: false, done: false, error: message })
+        }
+      }
+
       // 提议条的状态：idle → 生成中 → 预览卡片（含 batchId）→ 已写入 / 放弃
       // 2026-10-23 用户定方案 A：点「同意」由宿主调插件模型写正文，不再让模型跑一趟。
       const [propState, setPropState] = useState({ busy: false, cards: [], batchId: '', error: '', done: false })
@@ -3642,6 +3764,9 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 card,
                 // 会话末尾的卡片默认收成一行小预览，点一下才展开（2026-10-23 用户要求）
                 compact: true,
+                // 待写入的预览卡片：展开后可以单独写入这一条（2026-10-24 用户要求）
+                onWriteOne: save && save.batchId && !card.id ? writeOne : null,
+                writeState: writeOneState[String(card.title || '')] || '',
               }),
             ),
           ),
@@ -3760,7 +3885,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 'span',
                 { className: 'kb-save-bar-text' },
                 translate('saveBarTitle'),
-                h('b', null, ' ' + (save.count || 0) + ' '),
+                h('b', null, ' ' + leftCount + ' '),
                 save.topicName ? h('span', { className: 'kb-save-bar-topic' }, '→ ' + save.topicName) : null,
               ),
               h(
@@ -3768,7 +3893,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 { className: 'kb-vbtn primary', disabled: saveState.busy, onClick: writeNow },
                 saveState.busy
                   ? translate('saveWriting')
-                  : translate('saveConfirm') + ' ' + (save.count || 0) + ' ' + translate('unitCards'),
+                  : translate('saveConfirm') + ' ' + leftCount + ' ' + translate('unitCards'),
               ),
               saveState.error ? h('span', { className: 'kb-save-err' }, saveState.error) : null,
             )

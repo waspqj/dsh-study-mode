@@ -20,7 +20,7 @@
 import os from 'node:os'
 import path from 'node:path'
 
-import { createStore, getSaveBatch, dropSaveBatch, getProposal, dropProposal, registerSaveBatch, slugify } from './store.js'
+import { createStore, getSaveBatch, dropSaveBatch, trimSaveBatch, getProposal, dropProposal, registerSaveBatch, slugify } from './store.js'
 import { rankDocs } from './rank.js'
 import { formatBody } from './format.js'
 import { projectCard, validateBody, buildReviewPrompt, parseReviewJson, buildAskPrompt, BODY_SOFT_LIMIT } from './card.js'
@@ -579,20 +579,50 @@ function handleSaveBatch(body) {
   if ((batch.similarCount || 0) > 0 && !batch.bypassDuplicate) {
     throw httpError(409, '这批和库里的条目高度相似，先请用户裁决：补充原条目（learn_update）还是仍然新增（bypassDuplicate=true）。')
   }
+
+  // 只写其中几条（2026-10-24 用户要求：展开卡片后能单独审批）
+  //   body.items  = 下标数组（按批次里的顺序）
+  //   body.titles = 标题数组（界面侧更稳，不怕顺序变化）
+  // 都不给就是整批。
+  const allCards = Array.isArray(batch.cards) ? batch.cards : []
+  let cards = allCards
+  let remaining = []
+  const wantedIndexes = Array.isArray(body?.items) ? new Set(body.items.map(value => Number(value))) : null
+  const wantedTitles = Array.isArray(body?.titles) ? new Set(body.titles.map(value => String(value))) : null
+  if (wantedIndexes || wantedTitles) {
+    const picked = (card, index) =>
+      (wantedIndexes && wantedIndexes.has(index)) || (wantedTitles && wantedTitles.has(String(card.title || '')))
+    cards = allCards.filter((card, index) => picked(card, index))
+    remaining = allCards.filter((card, index) => !picked(card, index))
+    if (!cards.length) throw httpError(400, '至少要选一条要写入的卡片')
+  }
+
   const result = kb.planSave({
     topic: batch.topicArg || undefined,
-    cards: batch.cards,
+    cards,
     sessionId: batch.sessionId,
     dryRun: false,
   })
-  dropSaveBatch(batchId)
+  // 还有没确认的条目 → 批次留着（同一个 batchId），界面接着逐条确认
+  if (remaining.length) {
+    // 剩下的这些也「已经预览过」（用户看到的就是这一批），指纹要跟着批次一起更新 ——
+    // 否则第二次点「写入这条」会被预览闸门拦成「这批内容还没有预览过」（实测踩到）。
+    kb.markPreviewed(batch.slug, remaining)
+    trimSaveBatch(batchId, remaining)
+  } else {
+    dropSaveBatch(batchId)
+  }
   return {
     ok: true,
     status: 'written',
     topic: result.topic,
     total: result.total,
+    written: cards.length,
+    remaining: remaining.length,
     plan: result.plan,
-    message: `已写入主题「${result.topic}」，该主题现有 ${result.total} 条。`,
+    message:
+      `已写入主题「${result.topic}」，该主题现有 ${result.total} 条。` +
+      (remaining.length ? `还有 ${remaining.length} 条等你确认。` : ''),
   }
 }
 
