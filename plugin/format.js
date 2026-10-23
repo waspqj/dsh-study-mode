@@ -8,6 +8,50 @@
 
 const SENTENCE_END = new Set(['。', '！', '？'])
 
+/**
+ * 版本号 = 写入时刻的时间戳（epoch 毫秒）。
+ *
+ * 2026-10-23 用户定的规则：版本号不再自增，改成时间戳。好处：
+ *   · 跨端同步时能直接看出谁新谁旧（整数自增在不同端会撞车）
+ *   · 回退到原版时，版本号跟着正文一起回到原版那一刻
+ * 老数据还是小整数（1、2、3…），显示时按老样子处理。
+ */
+export const TIMESTAMP_VERSION_MIN = 1e12
+
+export function isStampVersion(value) {
+  const n = Number(value)
+  return Number.isFinite(n) && n >= TIMESTAMP_VERSION_MIN
+}
+
+const pad2 = (value) => String(value).padStart(2, '0')
+
+/** 完整版本号：时间戳显示成 '2026-10-23 01:28'，老整数显示成 'v2'。 */
+export function formatVersion(version) {
+  const n = Number(version)
+  if (!Number.isFinite(n)) return 'v' + String(version ?? '')
+  if (!isStampVersion(n)) return 'v' + n
+  const date = new Date(n)
+  return (
+    date.getFullYear() +
+    '-' +
+    pad2(date.getMonth() + 1) +
+    '-' +
+    pad2(date.getDate()) +
+    ' ' +
+    pad2(date.getHours()) +
+    ':' +
+    pad2(date.getMinutes())
+  )
+}
+
+/** 卡片脚上的短版本号：'10-23 01:28'（老数据仍是 'v2'）。 */
+export function shortVersion(version) {
+  const n = Number(version)
+  if (!Number.isFinite(n) || !isStampVersion(n)) return 'v' + n
+  const date = new Date(n)
+  return pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()) + ' ' + pad2(date.getHours()) + ':' + pad2(date.getMinutes())
+}
+
 /** 按顶层分隔符切分；括号里的分隔符不算（"(如 a；b)" 里的分号不是并列项）。 */
 function splitTopLevel(text, separators) {
   const parts = []

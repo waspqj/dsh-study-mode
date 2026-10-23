@@ -20,7 +20,8 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createStore, slugify } from './store.js'
-import { rankDocs } from './rank.js'
+import { rankDocs, CANDIDATE_RELATIVE, MIN_RELATIVE } from './rank.js'
+import { rerankHits, MAX_RELATED } from './rerank.js'
 
 export const name = 'learning-kb'
 
@@ -104,24 +105,64 @@ function renderSource(source) {
   return label ? `来源 ${label}` : '来源 未标注'
 }
 
+function renderHitBlock(hit) {
+  const lines = []
+  lines.push(`${hit.strength} [${hit.score}] ${hit.fromCurrent ? '★' : ''}${hit.title}${hit.verified ? ' ✓已核实' : ' ⚠未核实'}`)
+  if (hit.q) lines.push(`问：${hit.q}`)
+  lines.push(hit.body || '(空)')
+  const meta = []
+  if (hit.tags?.length) meta.push(`标签 ${hit.tags.join('/')}`)
+  if (hit.appliesTo) meta.push(`适用 ${hit.appliesTo}`)
+  if (hit.source) meta.push(renderSource(hit.source))
+  if (hit.topic) meta.push('主题 ' + hit.topic)
+  if (meta.length) lines.push(meta.join(' · '))
+  return lines
+}
+
+/**
+ * 把一条命中投影成界面卡片。
+ * 命中和相关补充共用同一份形状，界面只是把后者排在后面并默认折叠。
+ * @param {object} hit 命中条目
+ * @returns {object} 卡片数据
+ */
+function projectHitCard(hit) {
+  return {
+    id: hit.id || null,
+    title: String(hit.title || ''),
+    body: String(hit.body || ''),
+    topic: hit.topic || '',
+    topicName: hit.topicName || hit.topic || '',
+    kind: hit.kind || 'point',
+    tags: Array.isArray(hit.tags) ? hit.tags : [],
+    verified: hit.verified ?? false,
+    version: hit.version || 1,
+    source: hit.source || null,
+    updatedAt: hit.updatedAt || null,
+    score: typeof hit.score === 'number' ? hit.score : null,
+  }
+}
+
 function renderHits(value) {
   if (value.needTopic) {
     return `没有绑定主题，无法检索主题库。${value.note || ''}`
   }
+  const related = Array.isArray(value.related) ? value.related : []
   const lines = [
-    `检索 "${value.query}" → 范围 ${value.scope}，库内 ${value.total} 条，命中 ${value.hits.length} 条`,
+    `检索 "${value.query}" → 范围 ${value.scope}，库内 ${value.total} 条，命中 ${value.hits.length} 条`
+      + (related.length ? `，相关补充 ${related.length} 条` : ''),
   ]
   for (const hit of value.hits) {
     lines.push('')
-    lines.push(`${hit.strength} [${hit.score}] ${hit.fromCurrent ? '★' : ''}${hit.title}${hit.verified ? ' ✓已核实' : ' ⚠未核实'}`)
-    if (hit.q) lines.push(`问：${hit.q}`)
-    lines.push(hit.body || '(空)')
-    const meta = []
-    if (hit.tags?.length) meta.push(`标签 ${hit.tags.join('/')}`)
-    if (hit.appliesTo) meta.push(`适用 ${hit.appliesTo}`)
-    if (hit.source) meta.push(renderSource(hit.source))
-    if (hit.topic) meta.push('主题 ' + hit.topic)
-    if (meta.length) lines.push(meta.join(' · '))
+    lines.push(...renderHitBlock(hit))
+  }
+  // 相关补充：不是答案，但同领域。单独一段，模型能当作背景参考，界面里折叠显示。
+  if (related.length) {
+    lines.push('')
+    lines.push('—— 相关补充（不是答案，仅供参考）——')
+    for (const hit of related) {
+      lines.push('')
+      lines.push(...renderHitBlock(hit))
+    }
   }
   return lines.join('\n')
 }
@@ -131,6 +172,9 @@ function renderHits(value) {
  * OPS 替身。少了下面任何一个，宿主判定 READINESS_BLOCKED，agent 直接不可用
  *（2026-10-22 实测踩过：一发消息就挂）。这些工具永远不能被限制掉。
  */
+/** 当前主题的命中在排序里加权的系数：只用来压同分档，不能盖过高分答案。 */
+const CURRENT_TOPIC_BOOST = 1.15
+
 export const MUST_KEEP = [
   'ops_replace',
   'ops_write_file',
@@ -516,7 +560,7 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'learn_search',
     description:
-      '在知识库里检索。scope=topic 只查当前会话绑定的主题（默认），scope=all 查所有主题库（即整体库）。返回按相关度排序的条目，含正文、出处类型、是否已核实、适用版本与打分。',
+      '在知识库里检索。先做本地文字召回，再让大模型重排：命中（直接回答问题）和相关补充（同领域但不是答案）分两档返回，无关的丢掉。返回含正文、出处类型、是否已核实、适用版本与打分。模型不可用时自动退回本地排序，并在 rerank.reason 里说明。',
     parameters: toolSchema(
       {
         query: { type: 'string', description: '检索词，直接用问题原文即可' },
@@ -539,8 +583,18 @@ export function apply(ctx) {
     output: {
       schema: { type: 'object' },
       render: (_args, value) => text(renderHits(value)),
+      // 结构化卡片：界面用它把命中渲染成卡片（对话里 / 侧边栏里同一份数据）。
+      // 渲染文本是给人（和模型）看的，presentationMeta 才是给界面做卡片用的。
+      presentationMeta: (_args, value) => ({
+        kbCards: (Array.isArray(value?.hits) ? value.hits : []).map(projectHitCard),
+        // 相关补充：同一份投影，但界面里排在命中卡片之后、默认折叠。
+        kbRelated: (Array.isArray(value?.related) ? value.related : []).map(projectHitCard),
+        kbRerank: value?.rerank && value.rerank.used ? null : String(value?.rerank?.reason || ''),
+        // 检索重排也是真金白银的一次模型调用：用量随结果一起发到界面
+        kbTokens: value?.rerank && value.rerank.usage ? { rerank: value.rerank.usage } : null,
+      }),
     },
-    execute(args, exec) {
+    execute: async (args, exec) => {
       const sessionId = sessionIdOf(exec)
       const query = String(args?.query || '').trim()
       if (!query) throw new Error('query 不能为空')
@@ -568,49 +622,74 @@ export function apply(ctx) {
         }
       }
 
-      // auto：先查当前主题，命中不够再补其它主题 —— 保留「当前主题优先」语义，但只花一次调用
-      let groups = []
-      if (scope === 'all') {
-        groups = [allTopics.map(t => t.slug)]
-      } else if (scope === 'topic') {
-        groups = currentSlug ? [[currentSlug]] : []
-      } else if (currentSlug) {
-        groups = [[currentSlug], allTopics.map(t => t.slug).filter(s => s !== currentSlug)]
-      } else {
-        // 没绑定主题也照样查整体库（②级永远不跳过）
-        groups = [allTopics.map(t => t.slug)]
+      // 检索范围：
+      //   topic → 只查当前主题
+      //   all   → 查全部主题
+      //   auto  → 也查全部主题，但**当前主题的命中在同分档里优先**
+      //
+      // 这里修过一个会吞掉正确答案的 bug（2026-10-22 用户踩到）：
+      // 旧实现是「先查当前主题，凑够 limit 就不再查别的主题」，于是当前主题里
+      // 3 条无关的弱命中就能把别处的高分答案挤掉 ——
+      // 问「什么是 LRU cache」时，当前主题（mysql-进阶）返回 3 条缓冲池的弱命中，
+      // 真正那条 134 分的「什么是LRU cache」（在「面试」主题）连看都没看到。
+      const slugs = scope === 'topic'
+        ? (currentSlug ? [currentSlug] : [])
+        : allTopics.map(t => t.slug)
+
+      const docs = []
+      for (const slug of slugs) {
+        for (const entry of store.readEntries(slug)) {
+          if ((entry.status || 'active') !== 'active') continue
+          if (tag && !(entry.tags || []).includes(tag)) continue
+          docs.push({ ...entry, topicSlug: slug })
+        }
+      }
+      const total = docs.length
+
+      // 多取一些做候选：本地排序只提供"候选池"，最终分档交给大模型。
+      // 池子要比 limit 宽，而且**召回门槛放得松**（CANDIDATE_RELATIVE）——
+      // 精确判断交给重排那一步，本地不必先替它筛掉"差不多相关"的条目。
+      const depth = Math.min(60, Math.max(limit * 3, 8))
+      const ranked = rankDocs(docs, query, depth, { minRelative: CANDIDATE_RELATIVE })
+      const candidates = ranked
+        .map(hit => ({
+          ...hit,
+          verified: hit.verified ?? false,
+          appliesTo: hit.appliesTo || null,
+          fromCurrent: !!currentSlug && hit.topic === currentSlug,
+        }))
+        .sort((a, b) => {
+          const wa = a.score * (a.fromCurrent ? CURRENT_TOPIC_BOOST : 1)
+          const wb = b.score * (b.fromCurrent ? CURRENT_TOPIC_BOOST : 1)
+          return wb - wa
+        })
+
+      // 大模型重排：把候选分成「直接命中」和「相关补充」，无关的丢掉。
+      // 任何失败（没模型 / 超时 / 返回不合法）都退回本地排序，卡片照常出。
+      const split = await rerankHits({
+        ctx,
+        query,
+        hits: candidates,
+        limits: { limit, maxRelated: MAX_RELATED },
+      })
+
+      let matched = split.matched
+      let related = split.related
+      if (!split.used) {
+        // 降级：模型没帮上忙，就得靠本地门槛把噪声挡住。
+        // 用严格门槛（MIN_RELATIVE）重筛一遍，别把放给模型的宽松召回直接甩给用户。
+        const best = candidates.length ? candidates[0].score : 0
+        matched = candidates.filter(hit => hit.score >= best * MIN_RELATIVE).slice(0, limit)
+        related = []
       }
 
-      const hits = []
-      const seen = new Set()
-      let total = 0
-      for (const group of groups) {
-        const docs = []
-        for (const slug of group) {
-          for (const entry of store.readEntries(slug)) {
-            if ((entry.status || 'active') !== 'active') continue
-            if (tag && !(entry.tags || []).includes(tag)) continue
-            if (seen.has(entry.id)) continue
-            seen.add(entry.id)
-            docs.push({ ...entry, topicSlug: slug })
-          }
-        }
-        total += docs.length
-        if (hits.length >= limit) continue
-        for (const hit of rankDocs(docs, query, limit - hits.length)) {
-          hits.push({
-            ...hit,
-            verified: hit.verified ?? false,
-            appliesTo: hit.appliesTo || null,
-            fromCurrent: !!currentSlug && hit.topic === currentSlug,
-          })
-        }
-      }
       return {
         scope: scope === 'all' ? 'all' : currentSlug || (scope === 'auto' ? 'all' : 'topic'),
         query,
         total,
-        hits,
+        hits: matched,
+        related,
+        rerank: { used: split.used, reason: split.reason || '', usage: split.usage || null },
         currentTopic: currentSlug,
         note: currentSlug ? '' : '当前会话没绑定主题，已按整体库检索。入库前请先用 learn_topics 指定主题。',
       }
@@ -682,6 +761,33 @@ export function apply(ctx) {
     output: {
       schema: { type: 'object' },
       render: (_args, value) => text(renderSave(value)),
+      // 整理出来的卡片也走同一套渲染：写入计划里的 id / 版本对界面有用，
+      // 正文从入参拿（计划本身不带正文）。
+      presentationMeta: (args, value) => {
+        const cards = Array.isArray(args?.cards) ? args.cards : []
+        const plan = Array.isArray(value?.plan) ? value.plan : []
+        const slug = value?.topic || ''
+        const topicName = slug ? store.findTopic(slug)?.name || slug : ''
+        return {
+          kbCards: cards.map((card, index) => {
+            const item = plan[index] || {}
+            return {
+              id: item.id || null,
+              title: String(card?.title || ''),
+              body: String(card?.body || ''),
+              topic: slug,
+              topicName,
+              kind: card?.kind === 'qa' ? 'qa' : 'point',
+              tags: Array.isArray(card?.tags) ? card.tags : [],
+              verified: item.verified ?? false,
+              version: item.version || 1,
+              source: card?.source || null,
+              action: item.action || null,
+              status: value?.status || null,
+            }
+          }),
+        }
+      },
     },
     execute(args, exec) {
       return runSave({ ctx, store, args, exec })

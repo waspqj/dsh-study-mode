@@ -102,7 +102,8 @@ check('同标题再次写入变为更新且不重复', () => {
     cards: [{ title: 'redo log 两阶段提交', body: '（修订）prepare 写 redo。' }],
   })
   assert.equal(result.plan[0].action, 'update')
-  assert.equal(result.plan[0].version, 2)
+  // 版本号规则（2026-10-23）：写入时刻的时间戳，不是自增整数
+  assert.ok(result.plan[0].version >= 1e12, '版本号应该是时间戳：' + result.plan[0].version)
   assert.equal(result.total, 1)
 })
 
@@ -156,6 +157,27 @@ check('精确整句命中排在第一', () => {
 check('不相关查询不返回噪声', () => {
   assert.equal(rankDocs(docs(), '量子计算 拓扑 编译', 3).length, 0)
 })
+// 2026-10-22 用户实测反馈：「每次问一个问题都会有好多个根本没有关联的卡片」。
+// 根因是疑问词 bigram（什么/么是/什么是）当内容词参与打分 —— 任何带「什么」
+// 的条目都能进榜。下面两条把这个行为钉住。
+check('疑问词不参与打分：只靠「什么」不该进榜', () => {
+  const corpus = [
+    { id: 'lru', title: '什么是LRU cache', body: 'LRU 用哈希表加双向链表实现。', tags: [], topicSlug: 't' },
+    { id: 'uf', title: '什么是并查集', body: '并查集支持合并与查询两个操作。', tags: [], topicSlug: 't' },
+    { id: 'tx', title: '什么是事务', body: '事务有 ACID 四个特性。', tags: [], topicSlug: 't' },
+  ]
+  const hits = rankDocs(corpus, '什么是LRU cache', 3)
+  assert.deepEqual(hits.map(item => item.id), ['lru'])
+})
+check('分数远低于最佳分的不进榜', () => {
+  const corpus = [
+    { id: 'graph', title: '图的理解存储与遍历', body: '邻接矩阵与邻接表。', tags: [], topicSlug: 't' },
+    { id: 'engine', title: '存储引擎是可插拔的', body: 'InnoDB 与 MyISAM 可切换。', tags: [], topicSlug: 't' },
+  ]
+  const hits = rankDocs(corpus, '图的理解存储和遍历是什么样的', 5)
+  assert.equal(hits[0].id, 'graph')
+  assert.ok(!hits.some(item => item.id === 'engine'), '「存储」一个通用词不该把无关条目带进来')
+})
 check('分词：中文出 bigram，英文出词', () => {
   const tokens = tokenize('Redo Log 间隙锁')
   assert.ok(tokens.includes('redo'))
@@ -169,9 +191,11 @@ check('Jaccard 相似度合理', () => {
 })
 
 console.log('更新 / 归档 / 过滤')
-check('更新条目并升版本', () => {
+check('更新条目并升版本（版本号 = 时间戳）', () => {
+  const before = store.readEntries('mysql-进阶').find(item => item.id === redoId).version
   const result = store.updateEntry({ id: redoId, fields: { verified: true, appliesTo: 'MySQL 5.7 / 8.0' } })
-  assert.equal(result.version, 3)
+  assert.ok(result.version >= 1e12, '版本号应该是时间戳：' + result.version)
+  assert.ok(result.version > Number(before), '新版本号要比旧的大')
   const entry = store.readEntries('mysql-进阶').find(item => item.id === redoId)
   assert.equal(entry.verified, true)
   assert.equal(entry.appliesTo, 'MySQL 5.7 / 8.0')

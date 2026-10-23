@@ -22,6 +22,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import { rankDocs, jaccard, tokenSet, tokenize, entryTokenSet, tokenSetWithCompounds } from './rank.js'
+import { formatVersion } from './format.js'
 
 /** 把主题显示名转成目录用的 slug。中文保留，只清理空白与标点。 */
 export function slugify(name) {
@@ -79,6 +80,40 @@ export function createStore(root) {
   const PREVIEW_TTL_MS = 10 * 60 * 1000
 
   const now = () => new Date().toISOString()
+
+  /**
+   * 版本号 = 写入时刻的时间戳（epoch 毫秒）。
+   *
+   * 2026-10-23 用户定的规则：不再用自增整数。跨端同步时能直接比新旧，
+   * 回退到原版时版本号也跟着回到原版那一刻（见 rollbackCard）。
+   */
+  const stampVersion = () => Date.now()
+
+  /**
+   * 新版本号：时间戳，但要保证**比当前那版大**。
+   *
+   * 同一毫秒里连写两次，纯时间戳会撞号 —— 撞号意味着乐观锁失效
+   * （expectedVersion 比对不出来「已经改过了」）。所以同毫秒时 +1 兜底。
+   */
+  const nextVersion = (current) => {
+    const stamp = Date.now()
+    const prev = Number(current)
+    if (Number.isFinite(prev) && prev >= stamp) return prev + 1
+    return stamp
+  }
+
+  /** 老数据的版本号是小整数；这种一律按「非时间戳」处理。 */
+  const isStampVersion = (value) => {
+    const n = Number(value)
+    return Number.isFinite(n) && n >= 1e12
+  }
+
+  /** ISO 时间 → epoch 毫秒；解析不了就返回 null。 */
+  const isoToMs = (value) => {
+    if (!value) return null
+    const ms = Date.parse(String(value))
+    return Number.isFinite(ms) && ms > 0 ? ms : null
+  }
 
   function ensureRoot() {
     fs.mkdirSync(topicsDir, { recursive: true })
@@ -523,12 +558,16 @@ export function createStore(root) {
         entry => entry.normTitle === norm && (entry.kind || 'point') === kind,
       )
       const archived = existing && (existing.status || 'active') === 'archived'
+      // 新条目的 id 在建计划时就生成好：这样落盘后调用方拿到的 plan 里带着真实 id，
+      // 界面才能在「整理出来」的结果上直接给这张卡片挂操作。
+      const newId = existing ? null : 'k_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8)
       plan.push({
         title,
         kind,
         action: existing ? (archived ? 'restore' : 'update') : 'create',
-        id: existing ? existing.id : null,
-        version: existing ? (existing.version || 1) + 1 : 1,
+        id: existing ? existing.id : dryRun ? null : newId,
+        newId,
+        version: stampVersion(),
         body,
         tags: Array.isArray(card?.tags)
           ? card.tags.map(tag => String(tag).trim()).filter(Boolean).slice(0, 8)
@@ -567,7 +606,7 @@ export function createStore(root) {
           existing.updatedAt = now()
         } else {
           entries.push({
-            id: 'k_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
+            id: item.newId || 'k_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8),
             topic: slug,
             kind: item.kind,
             title: item.title,
@@ -581,7 +620,7 @@ export function createStore(root) {
             status: 'active',
             createdAt: now(),
             updatedAt: now(),
-            version: 1,
+            version: stampVersion(),
           })
         }
       }
@@ -612,8 +651,8 @@ export function createStore(root) {
     }
   }
 
-  /** 更新既有条目（按 id）。 */
-  function updateEntry({ id, topic, sessionId, fields }) {
+  /** 更新既有条目（按 id）。bumpVersion=false 时不升版本（核实状态走这条路）。 */
+  function updateEntry({ id, topic, sessionId, fields, bumpVersion = true }) {
     const slug = topic ? slugify(topic) : currentTopic(sessionId)
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
@@ -640,10 +679,221 @@ export function createStore(root) {
       }
       if (fields.verified !== undefined) entry.verified = !!fields.verified
       if (fields.kind !== undefined) entry.kind = fields.kind === 'qa' ? 'qa' : 'point'
-      entry.version = (entry.version || 1) + 1
+      if (bumpVersion) entry.version = nextVersion(entry.version)
       entry.updatedAt = now()
       writeEntries(candidate, entries)
       return { ok: true, topic: candidate, id: entry.id, version: entry.version, title: entry.title }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /**
+   * 找一条条目并返回它所在的主题。
+   * @param {{id: string, topic?: string}} options
+   * @returns {{topic: string, entry: object}} 找不到就抛错
+   */
+  function locateEntry({ id, topic }) {
+    const slug = topic ? slugify(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    for (const candidate of candidates) {
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (entry) return { topic: candidate, entry }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /**
+   * 写回卡片正文（AI 校验补充后覆盖用）。
+   *
+   * 三件事一起做：契约校验在调用方做，这里负责
+   *   1) 版本冲突保护：expectedVersion 与当前不符就抛 409，不覆盖
+   *   2) 原版快照：第一次修改时把原正文存进 originalBody，之后一直保留
+   *      —— 只留「原版 + 当前」两版，不堆多版历史
+   *   3) 正文变了 → 核实状态自动回落未核实（内容改了，旧的核实就失效）
+   *
+   * @param {{id: string, topic?: string, body: string, expectedVersion?: number}} options
+   */
+  function applyCardBody({ id, topic, body, expectedVersion, model }) {
+    const slug = topic ? slugify(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (!entry) continue
+      assertUnchanged(candidate, observed)
+      const current = entry.version || 1
+      if (expectedVersion !== undefined && expectedVersion !== null && Number(expectedVersion) !== current) {
+        const error = new Error(
+          `这条卡片在你之后被改过（现在是 ${formatVersion(current)}，你看到的是 ${formatVersion(expectedVersion)}）。请刷新后重新确认再写。`,
+        )
+        error.status = 409
+        error.code = 'VERSION_CONFLICT'
+        throw error
+      }
+      if (entry.originalBody === undefined || entry.originalBody === null) {
+        // 存原版快照时，连它的版本号和写入时间一起存 ——
+        // 回退时版本号要跟着正文一起回到原版那一刻（用户 2026-10-23 要求）
+        entry.originalBody = entry.body || ''
+        entry.originalVersion = current
+        entry.originalUpdatedAt = entry.updatedAt || null
+      }
+      entry.body = String(body ?? '').trim()
+      entry.version = nextVersion(current)
+      entry.updatedAt = now()
+      // 写回痕迹：这次正文是「AI 校验之后」改的，记一笔，但不动 source
+      // （source 是知识的出处，不能被工具改写盖掉）
+      entry.review = { at: entry.updatedAt, model: model ? String(model) : null }
+      // 正文变更 → 核实状态自动回落未核实
+      const hadVerify = !!(entry.verified || entry.verify)
+      entry.verified = false
+      delete entry.verify
+      writeEntries(candidate, entries)
+      return {
+        ok: true,
+        topic: candidate,
+        id: entry.id,
+        version: entry.version,
+        title: entry.title,
+        body: entry.body,
+        verifyReset: hadVerify,
+      }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /**
+   * 回退到原版。
+   *
+   * 只有两版：原版 + 当前。回退就是把两版对调 —— 刚才那版成了新的「原版」，
+   * 这样还能再退回去，但永远只存两版。
+   *
+   * 版本号也跟着对调（2026-10-23 用户要求）：内容回到原版，版本号就回到
+   * 原版那一刻的时间戳，不能继续往上累加。老条目的原版没有时间戳版本号时，
+   * 用原版的写入时间换算，保证版本号规则统一。
+   */
+  function rollbackCard({ id, topic }) {
+    const slug = topic ? slugify(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (!entry) continue
+      assertUnchanged(candidate, observed)
+      if (entry.originalBody === undefined || entry.originalBody === null) {
+        throw new Error('这条卡片没有原版快照（还没被改过），不用回退')
+      }
+      const currentBody = entry.body || ''
+      const currentVersion = entry.version || 1
+      const currentUpdatedAt = entry.updatedAt || null
+      const originalBody = entry.originalBody
+      // 原版那一版的版本号：优先原版自己的时间戳版本号；
+      // 老数据（整数版本）用原版写入时间换算
+      const originalVersion = isStampVersion(entry.originalVersion)
+        ? Number(entry.originalVersion)
+        : isoToMs(entry.originalUpdatedAt) || stampVersion()
+      const originalUpdatedAt = entry.originalUpdatedAt || null
+
+      // 两版对调（正文、版本号、写入时间一起对调）
+      entry.originalBody = currentBody
+      entry.originalVersion = currentVersion
+      entry.originalUpdatedAt = currentUpdatedAt
+      entry.body = originalBody
+      entry.version = originalVersion
+      entry.updatedAt = originalUpdatedAt || now()
+      entry.verified = false
+      delete entry.verify
+      writeEntries(candidate, entries)
+      return {
+        ok: true,
+        topic: candidate,
+        id: entry.id,
+        version: entry.version,
+        title: entry.title,
+        body: entry.body,
+        verifyReset: true,
+      }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /**
+   * 批量改核实状态。
+   *
+   * 批量只走「用户确认」这一条路径（by=source / ai-assisted 交给单条接口），
+   * 免得一口气把额度烧在 AI 上。同一个主题里的条目只写一次盘。
+   *
+   * @param {{ids: string[], topic?: string, state?: string, by?: string, note?: string}} options
+   */
+  function setVerifyMany({ ids, topic, state, by, note }) {
+    const wanted = Array.isArray(ids) ? ids.map(id => String(id)).filter(Boolean) : []
+    if (!wanted.length) throw new Error('没有要核实的条目')
+    const slug = topic ? slugify(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    const verified = state === 'unverified' ? false : true
+    const stamp = now()
+    const done = []
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      let touched = false
+      for (const entry of entries) {
+        if (!wanted.includes(entry.id)) continue
+        entry.verified = verified
+        entry.verify = {
+          state: verified ? 'verified' : 'unverified',
+          by: String(by || 'user'),
+          at: stamp,
+          note: note ? String(note).trim() : null,
+        }
+        entry.updatedAt = stamp
+        touched = true
+        done.push({ id: entry.id, topic: candidate, version: entry.version || 1 })
+      }
+      if (touched) {
+        assertUnchanged(candidate, observed)
+        writeEntries(candidate, entries)
+      }
+    }
+    if (!done.length) throw new Error('没有找到要核实的条目')
+    return { ok: true, count: done.length, entries: done }
+  }
+
+  /**
+   * 改核实状态。
+   *
+   * 核实不改正文、不升版本 —— 版本号只跟内容走。
+   * 写入时同步维护老的 verified 布尔，老工具和老代码不受影响。
+   */
+  function setVerify({ id, topic, state, by, note }) {
+    const slug = topic ? slugify(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(t => t.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (!entry) continue
+      assertUnchanged(candidate, observed)
+      const verified = state === 'verified'
+      entry.verified = verified
+      entry.verify = {
+        state: verified ? 'verified' : 'unverified',
+        by: String(by || 'user'),
+        at: now(),
+        note: note ? String(note).trim() : null,
+      }
+      entry.updatedAt = now()
+      writeEntries(candidate, entries)
+      return {
+        ok: true,
+        topic: candidate,
+        id: entry.id,
+        version: entry.version,
+        verified: entry.verified,
+        verify: entry.verify,
+      }
     }
     throw new Error(`找不到条目 ${id}`)
   }
@@ -687,7 +937,7 @@ export function createStore(root) {
       entry.status = 'active'
       delete entry.archivedAt
       entry.updatedAt = now()
-      entry.version = (entry.version || 1) + 1
+      entry.version = nextVersion(entry.version)
       writeEntries(candidate, entries)
       return { ok: true, topic: candidate, id, mode: 'restored', title: entry.title }
     }
@@ -744,6 +994,11 @@ export function createStore(root) {
     hasPreviewed,
     planSave,
     updateEntry,
+    locateEntry,
+    applyCardBody,
+    rollbackCard,
+    setVerify,
+    setVerifyMany,
     deleteEntry,
     restoreEntry,
     listEntries,

@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.15'
+    const UI_REV = '0.3.16'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -110,6 +110,87 @@ window.__ModuleLoader__.load({
         needTitle: '标题不能为空',
         needBody: '正文不能为空',
         searchScope: '检索只覆盖活跃条目',
+        // 会话内卡片
+        chatSearching: '正在检索知识库…',
+        chatSaving: '正在整理知识卡片…',
+        chatNoHit: '这次没有命中任何知识卡片',
+        expandAll: '展开全部',
+        collapseAll: '收起',
+        actReview: 'AI 校验补充',
+        actEdit: '编辑',
+        actAsk: '问一下',
+        actStaleNote: '库里已更新到',
+        actStaleHint: '这条在别处被改过了，这里显示的是旧版；先刷新会话里的卡片再改',
+        workTitle: '卡片工作台',
+        workCapNote: '只改这张卡，不动库里别的',
+        workModel: '模型',
+        aiParseFailed: 'AI 没按格式回答，这次没有结果',
+        aiParseFailedHint: '模型的回答不是 JSON，解析不了。点重试再问一次，或者把下面原文贴给我看。',
+        aiRetry: '重试',
+        workNoAdditions: 'AI 没找到可补充的要点',
+
+        workModelTip: '跟当前会话选的模型一致；切了模型，下次校验就用新的',
+        workRun: '让 AI 校验',
+        workRunning: '校验中…',
+        workRunAgain: '重新校验',
+        workCachedNote: '用的是上次的结果，这次没调模型',
+        workIssues: '发现的问题',
+        workIssuesDesc: '可能和事实不符的地方；确认是错的就点忽略',
+        workAdditions: '可补充的要点',
+        workAdditionsDesc: '「采纳」会追加成一条 - 要点写进正文',
+        workNoIssue: 'AI 没有发现事实性问题',
+        workSuggested: 'AI 建议的正文',
+        workSuggestedDesc: '整段改写建议，会覆盖当前正文，慎用',
+        workUseSuggested: '用这段替换正文',
+        workBody: '正文（可直接改）',
+        workBodyDesc: '框里只显示文字：**粗体**、`代码`、【高亮】这类标记已隐去；没改动的行保存时保留原标记',
+        workApply: '覆盖原卡片',
+        workApplyConfirm: '确认覆盖？旧正文已备份，可一键回退。',
+        workCancel: '取消',
+        workSaved: '已写回',
+        workCheckLead: '首行结论',
+        workCheckBullet: '要点行',
+        workCheckBacktick: '反引号成对',
+        workCheckBracket: '【】成对',
+        workAdopt: '采纳',
+        workIgnore: '忽略',
+        workViewCurrent: '查看当前版本',
+        workViewCurrentHide: '收起当前版本',
+        workCurrentDirty: '当前是未保存的修改 · 库里仍是 ',
+        workCurrentSaved: '已保存 · ',
+        askTitle: '只问这一条',
+        askHint: '只使用这条卡片，不关联会话里的其它内容',
+        askPlaceholder: '针对这条卡片提问…',
+        askSend: '发送',
+        askEmpty: '还没有追问。问点什么吧。',
+        askClear: '清空',
+        verifyTitle: '核实这条',
+        verifyCapNote: '只记录谁确认的，不改卡片内容',
+        verifySelfShort: '自己确认',
+        verifySelfDesc: '你看着对，就直接标为已核实。',
+        verifyAiShort: '让 AI 先查一遍',
+        verifyAiDesc: '模型只读这张卡找事实性问题，不改写正文；有出入会列在下面。',
+        verifySourceShort: '附上出处',
+        verifySourceDesc: '填 URL 或课件页号，出处记进核实记录，作为一条证据。',
+        verifyIssuesCap: 'AI 发现的问题',
+        verifySourceSave: '存为来源并核实',
+        verifySelf: '① 我自己看着对',
+        verifySelfBtn: '标为已核实',
+        verifyAi: '② 先让 AI 查一遍',
+        verifyAiBtn: '开始校验',
+        verifyNoIssue: 'AI 没有发现事实性问题',
+        verifyNoIssueBtn: '无异议，标为已核实',
+        verifyToFix: '去修改',
+        verifySource: '③ 附上出处（可选）',
+        verifySourcePh: 'URL / 课件页号…',
+        verifySourceBtn: '填来源',
+        verifyByUser: '用户确认',
+        verifyByAi: 'AI 无异议',
+        verifyBySource: '来源',
+        verifyDone: '已标记为已核实',
+        verifyReset: '内容已变更，核实状态已重置',
+        rollback: '回退到原版',
+        rollbackDone: '已回退到原版',
       },
       en: {
         title: 'Knowledge Base',
@@ -159,6 +240,87 @@ window.__ModuleLoader__.load({
         needTitle: 'Title is required',
         needBody: 'Body is required',
         searchScope: 'Search only covers active entries',
+        // Cards in the conversation
+        chatSearching: 'Searching the knowledge base…',
+        chatSaving: 'Collecting knowledge cards…',
+        chatNoHit: 'No knowledge card matched this time',
+        expandAll: 'Expand all',
+        collapseAll: 'Collapse',
+        actReview: 'AI review',
+        actEdit: 'Edit',
+        actAsk: 'Ask',
+        actStaleNote: 'stored version is now',
+        actStaleHint: 'This entry was changed elsewhere; the copy here is older. Refresh the card before editing.',
+        workTitle: 'Card workbench',
+        workCapNote: 'Touches this card only',
+        workModel: 'model',
+        aiParseFailed: 'The AI did not answer in the expected format',
+        aiParseFailedHint: 'Its reply was not JSON, so it could not be parsed. Retry, or show me the text below.',
+        aiRetry: 'Retry',
+        workNoAdditions: 'The AI found nothing to add',
+
+        workModelTip: 'Matches the model selected in this session; switching it applies to the next review',
+        workRun: 'Run AI review',
+        workRunning: 'Reviewing…',
+        workRunAgain: 'Run again',
+        workCachedNote: 'Reused the previous result; the model was not called',
+        workIssues: 'Issues found',
+        workIssuesDesc: 'Possible factual errors; ignore the ones that are fine',
+        workAdditions: 'Additions',
+        workAdditionsDesc: 'Adopt appends the point to the body as a "- " line',
+        workNoIssue: 'The AI found no factual problems',
+        workSuggested: 'Suggested body',
+        workSuggestedDesc: 'A full rewrite that replaces the current body; use with care',
+        workUseSuggested: 'Replace the body with this',
+        workBody: 'Body (edit directly)',
+        workBodyDesc: 'Plain text only: bold/code/highlight markers are hidden; untouched lines keep their formatting when saved',
+        workApply: 'Overwrite the card',
+        workApplyConfirm: 'Overwrite? The old body is kept and can be restored in one click.',
+        workCancel: 'Cancel',
+        workSaved: 'Saved',
+        workCheckLead: 'Lead line',
+        workCheckBullet: 'Bullet lines',
+        workCheckBacktick: 'Paired backticks',
+        workCheckBracket: 'Paired 【】',
+        workAdopt: 'Adopt',
+        workIgnore: 'Ignore',
+        workViewCurrent: 'View current version',
+        workViewCurrentHide: 'Hide current version',
+        workCurrentDirty: 'Unsaved changes · stored is still ',
+        workCurrentSaved: 'Saved · ',
+        askTitle: 'Ask this card only',
+        askHint: 'Only this card is used; nothing else from the conversation',
+        askPlaceholder: 'Ask about this card…',
+        askSend: 'Send',
+        askEmpty: 'No follow-up yet. Ask something.',
+        askClear: 'Clear',
+        verifyTitle: 'Verify this card',
+        verifyCapNote: 'Records who confirmed it; never edits the card',
+        verifySelfShort: 'Confirm it yourself',
+        verifySelfDesc: 'Looks right to you? Mark it verified right away.',
+        verifyAiShort: 'Let the AI check first',
+        verifyAiDesc: 'The model only reads this card for factual problems; it never rewrites the body.',
+        verifySourceShort: 'Attach a source',
+        verifySourceDesc: 'A URL or page number is stored with the verification as evidence.',
+        verifyIssuesCap: 'Problems the AI found',
+        verifySourceSave: 'Save source and verify',
+        verifySelf: '① I checked it myself',
+        verifySelfBtn: 'Mark as verified',
+        verifyAi: '② Let the AI check first',
+        verifyAiBtn: 'Start review',
+        verifyNoIssue: 'The AI found no factual problems',
+        verifyNoIssueBtn: 'No objections — mark verified',
+        verifyToFix: 'Go fix it',
+        verifySource: '③ Attach a source (optional)',
+        verifySourcePh: 'URL / page number…',
+        verifySourceBtn: 'Add source',
+        verifyByUser: 'confirmed by the user',
+        verifyByAi: 'AI found no objection',
+        verifyBySource: 'source',
+        verifyDone: 'Marked as verified',
+        verifyReset: 'The content changed, so the verification was reset',
+        rollback: 'Restore the original body',
+        rollbackDone: 'Restored the original body',
       },
     }
 
@@ -224,6 +386,11 @@ window.__ModuleLoader__.load({
 .kb-tags{display:flex;gap:5px;margin-top:6px;overflow:hidden;max-height:19px}
 .kb-tag{flex:none;font-size:10.5px;color:color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 55%,var(--dsw-alias-label-primary));background:color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 15%,transparent);border-radius:999px;padding:1px 7px}
 .kb-card-foot{display:flex;align-items:center;gap:6px;margin-top:6px;padding-right:76px;font-size:10px;color:var(--dsw-alias-label-secondary);opacity:.72}
+.kb-pick{flex:none;width:14px;height:14px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;font-size:9px;line-height:12px;text-align:center;color:var(--dsw-alias-bg-base);background:transparent;user-select:none}
+.kb-pick.on{background:var(--kb-accent);border-color:var(--kb-accent)}
+.kb-card.picking{cursor:default}
+.kb-batch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 18px;border-top:1px solid var(--kb-line);background:var(--kb-rail);font-size:12px;color:var(--dsw-alias-label-secondary);flex:none}
+.kb-batch .kb-btn{font-size:12px}
 .kb-rev{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);opacity:.8;font-variant-numeric:tabular-nums;margin-right:2px}
 .kb-score{font-size:10.5px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
 .kb-card-acts{position:absolute;right:6px;bottom:5px;display:flex;gap:4px;padding:2px 3px;border-radius:6px;background:color-mix(in srgb,var(--kb-card) 92%,transparent);opacity:0;pointer-events:none;transition:opacity .12s ease}
@@ -233,6 +400,8 @@ window.__ModuleLoader__.load({
 .kb-mini.danger{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
 .kb-mini.danger:hover{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-bg-base)}
 .kb-mini:disabled{opacity:.45;cursor:default}
+/* 过期卡片（别的端改过了）：提示 + 禁用编辑类按钮 */
+.kb-stale-note{font-size:10.5px;color:var(--dsw-alias-state-warn-primary);white-space:nowrap}
 .kb-overlay{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.58);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
 .kb-modal{--kb-surface:var(--kb-modal-bg,var(--dsw-alias-bg-overlay,#fff));display:flex;flex-direction:column;width:min(920px,94vw);height:auto;max-height:88vh;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;box-shadow:0 24px 64px rgba(0,0,0,.45);overflow:hidden;background:var(--kb-surface)}
 .kb-modal-head{display:flex;align-items:flex-start;gap:8px;padding:16px 20px 8px}
@@ -262,6 +431,84 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
 .kb-form .kb-row{display:flex;gap:8px}
 .kb-form .kb-row > label{flex:1 1 0;min-width:0}
 .kb-form-foot{display:flex;gap:8px;align-items:center}
+/* ---------------- 会话内卡片（工具结果里的知识卡片） ----------------
+   会话区不在 .kb-root 里，所以这里自带一套变量：底色用 transparent 混，
+   卡片在任何背景上都是「一层淡淡的提亮」，不会糊成一块。 */
+.kb-stack{--kb-surface:transparent;--kb-line:color-mix(in srgb,var(--dsw-alias-label-primary) 18%,transparent);--kb-card:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,transparent);--kb-field:color-mix(in srgb,var(--dsw-alias-label-primary) 8%,transparent);--kb-accent:#3b82f6;--kb-accent-soft:rgb(59 130 246 / .15);display:flex;flex-direction:column;gap:8px;margin:2px 0 6px;font-size:13px;line-height:1.55;color:var(--dsw-alias-label-primary)}
+.kb-chat-note{font-size:12px;color:var(--dsw-alias-label-secondary);padding:1px 0}
+.kb-stack-head{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary);opacity:.9;padding:0 2px}
+.kb-turn{margin:6px 0 2px}
+.kb-turn-head{display:flex;align-items:center;gap:8px;padding:0 2px 2px}
+.kb-turn-head .kb-mini{margin-left:auto}
+.kb-related{display:flex;flex-direction:column;gap:8px;margin-top:2px;padding-top:6px;border-top:1px dashed var(--kb-line)}
+.kb-related-head{display:flex;align-items:center;gap:6px;width:100%;font:inherit;font-size:11px;letter-spacing:.03em;color:var(--dsw-alias-label-secondary);background:transparent;border:0;border-radius:6px;padding:3px 2px;cursor:pointer;text-align:left}
+.kb-related-head:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2)}
+.kb-related-caret{font-size:9px;opacity:.75;width:9px;flex:none}
+.kb-related .kb-chat-card{opacity:.82}
+.kb-chat-card{position:relative;border:1px solid var(--kb-line);border-radius:9px;padding:9px 11px 9px 14px;background:var(--kb-card)}
+.kb-chat-card::before{content:'';position:absolute;left:0;top:10px;bottom:10px;width:2px;border-radius:0 2px 2px 0;background:var(--kb-tc,var(--kb-accent));opacity:.55}
+.kb-chat-head{display:flex;align-items:center;gap:6px;min-width:0}
+.kb-chat-title{flex:1 1 auto;min-width:0;font-weight:650;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kb-chat-topic{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);opacity:.85;max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-chat-body{margin-top:4px;font-size:12.5px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
+.kb-chat-body .kb-blocks>.kb-p:first-child{font-size:12.5px;font-weight:600;margin:0 0 6px}
+.kb-chat-body .kb-li-text{line-height:1.6}
+.kb-chat-foot{display:flex;align-items:center;gap:6px;margin-top:7px;flex-wrap:wrap}
+.kb-badge.ok{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary)}
+.kb-badge.clickable{cursor:pointer;font-family:inherit}
+.kb-badge.clickable:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-l2)}
+.kb-work,.kb-ask,.kb-verify{margin-top:9px;border-top:1px dashed var(--kb-line);padding-top:8px;display:flex;flex-direction:column;gap:7px}
+/* 校验面板：按「区块」组织，不是一排小按钮。
+   旧版 11.5px + 每行一个标签一个按钮，用户反馈「太小、分不出来」，
+   所以这里放大字号/间距，并用编号 + 标题 + 说明三段式区分三条核实路径。 */
+.kb-verify{margin:10px -2px 0;border:1px solid var(--kb-line);border-radius:10px;background:var(--kb-field);padding:0;overflow:hidden;display:block;font-size:13px;line-height:1.6}
+.kb-verify-cap{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--kb-line);background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent);font-size:12px;font-weight:650;letter-spacing:.02em;color:var(--dsw-alias-label-primary)}
+.kb-verify-cap-note{margin-left:auto;font-weight:400;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.kb-model-chip{flex:none;font-size:11px;line-height:1.5;padding:1px 8px;border-radius:20px;border:1px solid var(--kb-accent);color:var(--kb-accent);background:var(--kb-accent-soft);white-space:nowrap;font-weight:600;letter-spacing:.02em}
+.kb-vsec{display:flex;flex-direction:column;gap:7px;padding:12px 14px;border-bottom:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 7%,transparent)}
+.kb-vsec:last-child{border-bottom:0}
+.kb-vsec-head{display:flex;align-items:center;gap:8px}
+.kb-vsec-no{flex:none;width:19px;height:19px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--kb-accent);background:var(--kb-accent-soft)}
+.kb-vsec-title{font-size:13px;font-weight:650;color:var(--dsw-alias-label-primary)}
+.kb-vsec-desc{padding-left:27px;font-size:12px;line-height:1.6;color:var(--dsw-alias-label-secondary)}
+.kb-vsec-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-left:27px}
+.kb-vbtn{font:inherit;font-size:12.5px;line-height:1.5;height:30px;padding:0 13px;border-radius:7px;border:1px solid var(--kb-line);background:transparent;color:var(--dsw-alias-label-primary);cursor:pointer;white-space:nowrap}
+.kb-vbtn:hover{border-color:var(--kb-accent);color:var(--kb-accent);background:var(--kb-accent-soft)}
+.kb-vbtn.primary{border-color:var(--kb-accent);color:var(--kb-accent);background:var(--kb-accent-soft)}
+.kb-vbtn.primary:hover{background:var(--kb-accent);color:#fff}
+.kb-vbtn:disabled{opacity:.45;cursor:default}
+.kb-vbtn:disabled:hover{border-color:var(--kb-line);color:var(--dsw-alias-label-primary);background:transparent}
+.kb-vissues{display:flex;flex-direction:column;gap:6px;margin-left:27px;padding-left:10px;border-left:2px solid var(--dsw-alias-state-warn-primary)}
+.kb-vissues-cap{font-size:11px;font-weight:600;letter-spacing:.03em;color:var(--dsw-alias-state-warn-primary)}
+.kb-vissue{font-size:12.5px;line-height:1.65;color:var(--dsw-alias-state-warn-primary)}
+.kb-vok{margin-left:27px;font-size:12.5px;color:var(--dsw-alias-state-success-primary)}
+/* 工作台复用同一套区块外壳，只多两处：要点行排版、正文框高度 */
+.kb-workpanel{margin-top:10px}
+.kb-addrow{display:flex;align-items:flex-start;gap:8px;padding-left:27px}
+.kb-addrow .kb-grow{flex:1 1 auto;min-width:0}
+.kb-addrow .kb-vbtn{flex:none}
+.kb-work-body{min-height:160px;font-size:12.5px;line-height:1.65;resize:vertical}
+.kb-raw{white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-label-primary) 4%,transparent);border-radius:6px;padding:7px 9px;margin-left:27px}
+.kb-work-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.kb-work-note{font-size:11.5px;color:var(--dsw-alias-label-secondary);flex:1 1 auto;min-width:0}
+/* 「用的是上次的结果」这类提示：跟说明文字同层级，但更弱，别抢注意力 */
+.kb-cache-note{font-size:11px;color:var(--dsw-alias-label-secondary);opacity:.85;white-space:nowrap}
+.kb-token-note{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary);opacity:.9;white-space:nowrap;font-variant-numeric:tabular-nums}
+/* 当前版本（改完之后这一版）：只读渲染，跟库里的对比靠顶部那一行说明 */
+.kb-current{margin-top:10px;border:1px solid var(--kb-line);border-radius:8px;padding:8px 10px;background:var(--kb-field)}
+.kb-current-cap{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dsw-alias-label-secondary);margin-bottom:5px}
+.kb-work-cap{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary);opacity:.9}
+.kb-add{border:1px solid var(--kb-line);border-radius:7px;padding:6px 8px;font-size:11.5px;line-height:1.5;color:var(--dsw-alias-label-secondary);background:var(--kb-field);word-break:break-word}
+.kb-check{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.kb-check .yes{color:var(--dsw-alias-state-success-primary)}
+.kb-check .no{color:var(--dsw-alias-state-error-primary)}
+.kb-ask-turn{font-size:12px;line-height:1.6}
+.kb-ask-q{color:var(--dsw-alias-label-primary);font-weight:600}
+.kb-ask-a{color:var(--dsw-alias-label-secondary);white-space:pre-wrap;margin-top:2px;word-break:break-word}
+.kb-ask-meta{font-size:11px;color:var(--dsw-alias-label-secondary);opacity:.9;margin-top:3px;font-variant-numeric:tabular-nums}
+.kb-ask-input{display:flex;gap:6px;align-items:center}
+.kb-ask-input .kb-input{flex:1 1 auto;min-width:0}
+.kb-verify-input{flex:1 1 160px;min-width:0;height:28px}
 `
 
     /**
@@ -399,7 +646,15 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         body: JSON.stringify(body || {}),
       })
       const json = await res.json().catch(() => null)
-      if (!res.ok) throw new Error((json && json.error) || `HTTP ${res.status}`)
+      if (!res.ok) {
+        const message = (json && json.error) || `HTTP ${res.status}`
+        // 卡片这组接口是宿主半侧新加的：宿主没重启时它们还不存在。
+        // 直接把「未知接口」甩给用户没有意义，这里说清楚要重启。
+        if (res.status === 404 && String(path).startsWith('/card/')) {
+          throw new Error('这个功能要重启 DSH 之后才生效（宿主半侧还没重新加载）')
+        }
+        throw new Error(message)
+      }
       return json
     }
 
@@ -640,6 +895,61 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       return blocks
     }
 
+    /**
+     * 正文里的标记符号只是给渲染层看的：**粗体**、`代码`、【高亮】、> 引用。
+     * 编辑框里没必要让人盯着这些符号（改完还要过一遍校验流程），所以显示前
+     * 统一去标记、只留文字。唯一的例外是行首的 "- " —— 它既是列表本身，
+     * 也是写入契约里的一条要点行，留着才读得像列表。
+     */
+    function toPlainBody(text) {
+      return String(text ?? '')
+        .split(/\r\n|\r|\n/)
+        .map((line) => {
+          let out = line.replace(/^\s*>\s?/, '')
+          out = out.replace(/【([^】]*)】/g, '$1')
+          out = out.replace(/\*\*([^*]+)\*\*/g, '$1')
+          out = out.replace(/`([^`]*)`/g, '$1')
+          // 落单的标记（没成对的 ** 或反引号）直接抹掉，别让它留在框里难看
+          return out.replace(/\*\*|`/g, '')
+        })
+        .join('\n')
+    }
+
+    /**
+     * 把「用户编辑过的纯文本」合回原正文。
+     *
+     * 编辑框里看到的是去标记后的文字，但写回库里的不该全是裸文本 ——
+     * 否则「打开面板看一眼再点保存」就把存量卡片里的加粗、代码标记全洗掉了。
+     * 规则：内容没动的行保留原样（原标记还在），改过的 / 新加的行按纯文本写。
+     */
+    function mergeMarkup(original, edited) {
+      const raw = String(original ?? '')
+      const plain = toPlainBody(raw)
+      const next = String(edited ?? '')
+      if (next === plain) return raw
+      const rawLines = raw.split(/\r\n|\r|\n/)
+      const plainLines = plain.split(/\r\n|\r|\n/)
+      const out = []
+      let cursor = 0
+      for (const line of next.split(/\r\n|\r|\n/)) {
+        let hit = -1
+        // 允许小幅错位：用户删掉一行时，它后面的行还能对上原来的标记
+        for (let i = cursor; i < plainLines.length && i < cursor + 4; i += 1) {
+          if (plainLines[i] === line) {
+            hit = i
+            break
+          }
+        }
+        if (hit >= 0) {
+          out.push(rawLines[hit])
+          cursor = hit + 1
+        } else {
+          out.push(line)
+        }
+      }
+      return out.join('\n')
+    }
+
     function renderRuns(runs, key) {
       return runs.map((run, index) => {
         const props = { key: key + index }
@@ -707,7 +1017,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     }
 
     function EntryCard(props) {
-      const { entry, t, onOpen, onArchive, onRestore, onDelete, busy, score, coverage } = props
+      const { entry, t, onOpen, onArchive, onRestore, onDelete, busy, score, coverage, selectable, selected, onToggle } = props
       const [confirming, setConfirming] = useState(false)
       const timer = useRef(null)
       const archived = entry.status === 'archived'
@@ -731,11 +1041,19 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         onDelete(entry)
       }
 
+      const open = () => {
+        if (selectable) {
+          onToggle(entry.id)
+          return
+        }
+        onOpen(entry)
+      }
+
       return h(
         'article',
         {
-          className: 'kb-card' + (archived ? ' archived' : ''),
-          onClick: () => onOpen(entry),
+          className: 'kb-card' + (archived ? ' archived' : '') + (selectable ? ' picking' : ''),
+          onClick: open,
           role: 'button',
           tabIndex: 0,
           title: t('open'),
@@ -744,6 +1062,18 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         h(
           'div',
           { className: 'kb-card-head' },
+          selectable
+            ? h(
+                'span',
+                {
+                  className: 'kb-pick' + (selected ? ' on' : ''),
+                  onClick: withStop(() => onToggle(entry.id)),
+                  role: 'checkbox',
+                  'aria-checked': !!selected,
+                },
+                selected ? '✓' : '',
+              )
+            : null,
           h('span', { className: 'kb-card-title' }, entry.title),
           entry.kind === 'qa' ? h(Badge, null, t('kindQa')) : null,
           entry.verified ? null : h(Badge, { tone: 'quiet' }, t('unverified')),
@@ -763,7 +1093,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           { className: 'kb-card-foot' },
           typeof score === 'number' ? h('span', { className: 'kb-score' }, 'score ' + score) : null,
           // 版本号放左边：右下角是操作按钮浮现的位置，放右边会与「归档/删除」重合
-          h('span', { className: 'kb-score' }, 'v' + entry.version + (entry.updatedAt ? ' · ' + fmtTime(entry.updatedAt) : '')),
+          h('span', { className: 'kb-score' }, shortVersion(entry.version) + (entry.updatedAt ? ' · ' + fmtTime(entry.updatedAt) : '')),
           h('span', { className: 'kb-grow' }),
         ),
         h(
@@ -792,10 +1122,24 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
 
     // ---------------------------------------------------------------- 详情浮层
     function EntryModal(props) {
-      const { entry, t, busy, score, coverage, onClose, onArchive, onRestore, onDelete } = props
+      const { entry, t, busy, score, coverage, onClose, onArchive, onRestore, onDelete, onChanged } = props
       const [confirming, setConfirming] = useState(false)
+      const [panel, setPanel] = useState('')
+      const [rollbackBusy, setRollbackBusy] = useState(false)
       const timer = useRef(null)
       const archived = entry.status === 'archived'
+
+      const rollback = async () => {
+        setRollbackBusy(true)
+        try {
+          const data = await apiPost('/card/rollback', { id: entry.id, topic: entry.topic })
+          if (onChanged) onChanged({ body: data.body, version: data.version, verified: false, verify: null })
+        } catch (err) {
+          if (typeof console !== 'undefined') console.warn('[learning-kb] 回退失败', err)
+        } finally {
+          setRollbackBusy(false)
+        }
+      }
 
       useEffect(() => {
         if (typeof document === 'undefined') return undefined
@@ -848,11 +1192,30 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
               'div',
               { className: 'kb-modal-badges' },
               h(Badge, null, entry.kind === 'qa' ? t('kindQa') : t('kindPoint')),
-              entry.verified ? null : h(Badge, { tone: 'warn' }, t('unverified')),
+              h(VerifyBadge, { card: entry, onToggle: () => setPanel(panel === 'verify' ? '' : 'verify') }),
               archived ? h(Badge, { tone: 'idle' }, t('archivedTag')) : null,
             ),
             entry.q ? h('div', { className: 'kb-modal-q' }, 'Q ' + entry.q) : null,
             h('div', { className: 'kb-modal-text' }, h(BodyBlocks, { body: entry.body })),
+            panel === 'verify'
+              ? h(VerifyPanel, {
+                  card: entry,
+                  onClose: () => setPanel(''),
+                  onSaved: patch => {
+                    if (onChanged) onChanged(patch)
+                  },
+                })
+              : null,
+            panel === 'work'
+              ? h(Workbench, {
+                  card: entry,
+                  autoReview: true,
+                  onClose: () => setPanel(''),
+                  onSaved: patch => {
+                    if (onChanged) onChanged(patch)
+                  },
+                })
+              : null,
           ),
           h(
             'div',
@@ -860,7 +1223,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             h(
               'span',
               { className: 'kb-modal-meta' },
-              (entry.topicName || entry.topic || '') + ' · v' + entry.version + (entry.updatedAt ? ' · ' + fmtTime(entry.updatedAt) : ''),
+              (entry.topicName || entry.topic || '') + ' · ' + formatVersion(entry.version) + (entry.updatedAt ? ' · ' + fmtTime(entry.updatedAt) : ''),
             ),
             typeof score === 'number'
               ? h(
@@ -871,6 +1234,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
               : null,
             source ? h('span', { className: 'kb-modal-meta' }, t('sourceLabel') + '：' + source) : null,
             h('span', { className: 'kb-grow' }),
+            h('button', { className: 'kb-btn', disabled: busy, onClick: () => setPanel(panel === 'work' ? '' : 'work') }, t('actReview')),
+            h('button', { className: 'kb-btn', disabled: rollbackBusy, onClick: rollback, title: t('rollback') }, t('rollback')),
             archived
               ? h('button', { className: 'kb-btn', disabled: busy, onClick: () => onRestore(entry) }, t('restore'))
               : h('button', { className: 'kb-btn', disabled: busy, onClick: () => onArchive(entry) }, t('archive')),
@@ -1015,6 +1380,10 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const [busyId, setBusyId] = useState('')
       const [adding, setAdding] = useState(false)
       const [detail, setDetail] = useState(null)
+      const [multi, setMulti] = useState(false)
+      const [picked, setPicked] = useState([])
+      // 本页打开以来 AI 调用累计（校验 + 追问；不含检索重排）
+      const tokenTotal = useTokenTotal()
       const [tick, setTick] = useState(0)
       const alive = useRef(true)
       const noticeTimer = useRef(null)
@@ -1100,6 +1469,28 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const totalAll = (overview && overview.total) || 0
       const searching = debounced.length > 0
       const list = searching ? hits : entries
+      const unverifiedCount = list.filter(item => !item.verified).length
+
+      const togglePick = (id) => {
+        setPicked(current => (current.includes(id) ? current.filter(item => item !== id) : current.concat([id])))
+      }
+
+      const batchVerify = async () => {
+        if (!picked.length) return
+        setBusyId('batch')
+        setError('')
+        try {
+          const data = await apiPost('/card/verify-batch', { ids: picked, by: 'user' })
+          flash('已核实 ' + (data.count || picked.length) + ' 条')
+          setPicked([])
+          setMulti(false)
+          refresh()
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusyId('')
+        }
+      }
 
       return h(
         'div',
@@ -1114,7 +1505,31 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             `${totalActive} 条 · ${topics.length} 个主题`,
           ),
           h('span', { className: 'kb-grow' }),
+          tokenTotal > 0
+            ? h(
+                'span',
+                {
+                  className: 'kb-token-note',
+                  title: '本页打开以来「AI 校验补充 / 问一下」消耗的 tokens 合计（检索重排的用量显示在回答下方那行里）',
+                },
+                'AI 累计 ' + formatTokens(tokenTotal) + ' tokens',
+              )
+            : null,
           h('span', { className: 'kb-rev', title: '当前加载的界面版本' }, 'UI ' + UI_REV),
+          unverifiedCount > 0
+            ? h(
+                'button',
+                {
+                  className: 'kb-btn' + (multi ? ' primary' : ''),
+                  onClick: () => {
+                    setMulti(!multi)
+                    setPicked([])
+                  },
+                  title: '批量把选中的条目标为已核实',
+                },
+                '未核实 ' + unverifiedCount + ' 条',
+              )
+            : null,
           h('button', { className: 'kb-btn', onClick: refresh, disabled: loading }, t('refresh')),
           h('button', { className: 'kb-btn primary', onClick: () => setAdding(!adding) }, t('add')),
         ),
@@ -1259,6 +1674,9 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 score: searching ? entry.score : undefined,
                 coverage: searching ? entry.coverage : undefined,
                 busy: busyId === entry.id,
+                selectable: multi,
+                selected: picked.includes(entry.id),
+                onToggle: togglePick,
                 onOpen: (item) => setDetail(item),
                 onArchive: (item) => mutate('/archive', { topic: item.topic, id: item.id }, t('archive')),
                 onRestore: (item) => mutate('/restore', { topic: item.topic, id: item.id }, t('restore')),
@@ -1268,6 +1686,30 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             ),
           ),
         ),
+        multi
+          ? h(
+              'div',
+              { className: 'kb-batch' },
+              h('span', null, '已选 ' + picked.length + ' 条'),
+              h('span', { className: 'kb-grow' }),
+              h(
+                'button',
+                { className: 'kb-btn primary', disabled: !picked.length || busyId === 'batch', onClick: batchVerify },
+                '批量标为已核实' + (picked.length ? ' (' + picked.length + ')' : ''),
+              ),
+              h(
+                'button',
+                {
+                  className: 'kb-btn',
+                  onClick: () => {
+                    setMulti(false)
+                    setPicked([])
+                  },
+                },
+                t('close'),
+              ),
+            )
+          : null,
         detail
           ? h(EntryModal, {
               entry: detail,
@@ -1288,12 +1730,1313 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 setDetail(null)
                 mutate('/delete', { topic: item.topic, id: item.id }, t('remove'))
               },
+              onChanged: (patch) => {
+                setDetail(current => (current ? { ...current, ...patch } : current))
+                refresh()
+              },
             })
           : null,
       )
     }
 
     // ---------------------------------------------------------------- 注册
+    // ---------------------------------------------------------------- 会话内卡片
+    //
+    // 工具结果里带结构化卡片：learn_search / learn_save 的 output.presentationMeta
+    // 落到工具结果的 block.meta.kbCards，浏览器半侧按 wire 工具名在
+    // tool.call.toolview 这个 keyed slot 上注册自己的行（和官方 skill 工具同一个套路）。
+    //
+    // 为什么工作台 / 追问都「就地展开」而不是浮层：
+    //   会话区在 DOM 里很深，浮层要靠 portal 才能躲开祖先的 transform；
+    //   而这个浏览器半侧只保证能 require('react')，不保证有 react-dom。
+    //   就地展开没有这些依赖，也不会被祖先的 overflow 裁掉。
+
+    /** 从工具结果里取出结构化卡片。 */
+    function cardsOf(block) {
+      return cardsOfKey(block, 'kbCards')
+    }
+
+    /** 相关补充卡片（重排判定为「同领域但不是答案」的那一组）。 */
+    function relatedCardsOf(block) {
+      return cardsOfKey(block, 'kbRelated')
+    }
+
+    function cardsOfKey(block, key) {
+      if (!block || typeof block !== 'object') return []
+      const meta = block.meta
+      if (!meta || typeof meta !== 'object') return []
+      const list = meta[key]
+      if (!Array.isArray(list)) return []
+      return list.filter(card => card && typeof card === 'object' && card.title)
+    }
+
+    /** 工具入参里的检索词（兜底用：万一 meta 没带过来，就按这个词再查一次）。 */
+    function queryOfArgs(block) {
+      if (!block || typeof block !== 'object') return ''
+      const raw = block.call && block.call.argsRaw
+      if (typeof raw !== 'string' || !raw) return ''
+      try {
+        const parsed = JSON.parse(raw)
+        return parsed && typeof parsed === 'object' ? String(parsed.query || '') : ''
+      } catch {
+        return ''
+      }
+    }
+
+    /** 正文契约的本地检查（服务端还会再查一遍，这里只是提前给反馈）。 */
+    function contractCheck(body) {
+      const text = String(body || '').trim()
+      const lines = text.split('\n')
+      const first = (lines[0] || '').trim()
+      const ticks = (text.match(/`/g) || []).length
+      const open = (text.match(/【/g) || []).length
+      const close = (text.match(/】/g) || []).length
+      return {
+        empty: !text,
+        lead: !!text && !first.startsWith('- '),
+        bullet: lines.some(line => line.trim().startsWith('- ')),
+        backtick: ticks % 2 === 0,
+        bracket: open === close,
+      }
+    }
+
+    /** 把一条补充变成要点行。 */
+    function toBullet(text) {
+      const value = String(text || '').trim()
+      if (!value) return ''
+      if (value.startsWith('- ')) return value
+      return '- ' + value.replace(/\n+/g, ' ')
+    }
+
+    /** 核实徽标：已核实显示绿勾，未核实可点。 */
+    function VerifyBadge(props) {
+      const { card, onToggle } = props
+      if (card.verified) {
+        const info = card.verify || {}
+        const who = info.by === 'ai-assisted' ? translate('verifyByAi') : info.by === 'source' ? translate('verifyBySource') : translate('verifyByUser')
+        const tip = [info.at ? fmtTime(info.at) : '', who, info.note || ''].filter(Boolean).join(' · ')
+        return h('span', { className: 'kb-badge ok', title: tip }, '✓')
+      }
+      return h(
+        'button',
+        { className: 'kb-badge quiet clickable', onClick: onToggle, title: translate('verifyTitle') },
+        translate('unverified'),
+      )
+    }
+
+    /**
+     * 取「校验会用的模型」。
+     *
+     * 模型跟着当前会话走（宿主读 agentDefaultModel），所以打开面板时先问一次，
+     * 不用等校验跑完就能把「模型 xxx」标出来。接口不存在（还没重启）时安静失败，
+     * 面板照常能用，只是暂时看不到模型名。
+     */
+    function useKbModel() {
+      const [info, setInfo] = useState(null)
+      useEffect(() => {
+        let alive = true
+        apiGet('/card/model')
+          .then(data => {
+            if (!alive) return
+            if (data && data.model) setInfo({ provider: data.provider || '', model: String(data.model), effort: data.reasoningEffort ? String(data.reasoningEffort) : '' })
+          })
+          .catch(() => {})
+        return () => {
+          alive = false
+        }
+      }, [])
+      return info
+    }
+
+    // ---------------------------------------------------------------- 校验结果缓存
+    // 「AI 校验补充」每点开一次都会重跑一遍模型：同一张卡、同一版正文、同一个模型，
+    // 重复点纯属白烧额度。结果按 (卡片, 模式, 版本, 正文指纹) 缓存：
+    //   · 卡片改过（版本或正文变了）→ key 变了，自然失效
+    //   · 换过模型 → 不拿旧结果冒充「跟当前会话对齐」
+    //   · 用户点「重新校验」→ 强制重跑
+    // 失败 / 解析失败的结果不进缓存：下次点开必须真的重试。
+    const REVIEW_CACHE = new Map()
+    const REVIEW_TTL_MS = 30 * 60 * 1000
+    const REVIEW_CACHE_MAX = 40
+
+    /** 正文指纹：只用来判断「是不是同一版」，不参与展示。 */
+    function hashText(text) {
+      const source = String(text ?? '')
+      let hash = 5381
+      for (let i = 0; i < source.length; i += 1) hash = ((hash << 5) + hash + source.charCodeAt(i)) >>> 0
+      return hash.toString(36)
+    }
+
+    function reviewCacheKey(card, mode) {
+      const target = card || {}
+      return [target.id || '', target.topic || '', mode || 'both', target.version || 1, hashText(target.body || '')].join('|')
+    }
+
+    function reviewCacheGet(card, mode, model) {
+      const key = reviewCacheKey(card, mode)
+      const entry = REVIEW_CACHE.get(key)
+      if (!entry) return null
+      if (Date.now() - entry.at > REVIEW_TTL_MS) {
+        REVIEW_CACHE.delete(key)
+        return null
+      }
+      if (model && entry.data && entry.data.model && entry.data.model !== model) return null
+      return entry.data
+    }
+
+    function reviewCacheSet(card, mode, data) {
+      if (!data || data.ok !== true || data.parseError) return
+      const key = reviewCacheKey(card, mode)
+      REVIEW_CACHE.set(key, { at: Date.now(), data })
+      while (REVIEW_CACHE.size > REVIEW_CACHE_MAX) {
+        const oldest = REVIEW_CACHE.keys().next()
+        if (oldest.done) break
+        REVIEW_CACHE.delete(oldest.value)
+      }
+    }
+
+    function reviewCacheClear() {
+      REVIEW_CACHE.clear()
+    }
+
+    // ---------------------------------------------------------------- token 用量
+    // 宿主把 llm.stream 的 usage 原值带回来了（校验 / 追问各是一次调用）。
+    // 这里只负责展示，不估算：宿主没给就什么都不显示，绝不编一个数字。
+    //   · 每个面板「本次 N tokens」（缓存命中显示「上次」）
+    //   · 侧边栏「AI 累计 N tokens」——用 sessionStorage 记，刷新页面还在
+    const TOKEN_STORE_KEY = 'kb-token-usage'
+    const tokenListeners = new Set()
+    let tokenTotalCache = null
+
+    function readTokenTotal() {
+      if (tokenTotalCache !== null) return tokenTotalCache
+      let value = 0
+      try {
+        if (typeof sessionStorage !== 'undefined') value = Number(sessionStorage.getItem(TOKEN_STORE_KEY)) || 0
+      } catch {
+        value = 0
+      }
+      tokenTotalCache = Number.isFinite(value) && value > 0 ? Math.round(value) : 0
+      return tokenTotalCache
+    }
+
+    function addTokenUsage(usage) {
+      const amount = Number(usage && usage.totalTokens)
+      if (!Number.isFinite(amount) || amount <= 0) return readTokenTotal()
+      tokenTotalCache = readTokenTotal() + Math.round(amount)
+      try {
+        if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(TOKEN_STORE_KEY, String(tokenTotalCache))
+      } catch {
+        // 隐私模式 / 禁用存储：只影响刷新后还记不记得，不影响本次显示
+      }
+      for (const listener of tokenListeners) {
+        try {
+          listener(tokenTotalCache)
+        } catch {
+          // 单个监听器坏了不该拖垮别的面板
+        }
+      }
+      return tokenTotalCache
+    }
+
+    function useTokenTotal() {
+      const [value, setValue] = useState(readTokenTotal())
+      useEffect(() => {
+        const listener = (next) => setValue(next)
+        tokenListeners.add(listener)
+        return () => {
+          tokenListeners.delete(listener)
+        }
+      }, [])
+      return value
+    }
+
+    function formatTokens(value) {
+      const n = Math.round(Number(value) || 0)
+      return n.toLocaleString('en-US')
+    }
+
+    // ---------------------------------------------------------------- 版本号显示
+    // 版本号规则（2026-10-23 用户定）：写入时刻的时间戳（epoch 毫秒）。
+    // 好处：跨端能直接比新旧；回退到原版时版本号跟着正文回到原版那一刻。
+    // 老数据还是小整数（1、2、3…），显示时按老样子。
+    function isStampVersion(value) {
+      const n = Number(value)
+      return Number.isFinite(n) && n >= 1e12
+    }
+
+    const pad2 = (value) => String(value).padStart(2, '0')
+
+    /** 完整版本号：'2026-10-23 01:28'；老数据 'v2'。 */
+    function formatVersion(version) {
+      const n = Number(version)
+      if (!Number.isFinite(n)) return 'v' + String(version == null ? '' : version)
+      if (!isStampVersion(n)) return 'v' + n
+      const date = new Date(n)
+      return (
+        date.getFullYear() +
+        '-' +
+        pad2(date.getMonth() + 1) +
+        '-' +
+        pad2(date.getDate()) +
+        ' ' +
+        pad2(date.getHours()) +
+        ':' +
+        pad2(date.getMinutes())
+      )
+    }
+
+    /** 卡片脚上的短版本号：'10-23 01:28'。 */
+    function shortVersion(version) {
+      const n = Number(version)
+      if (!Number.isFinite(n) || !isStampVersion(n)) return 'v' + n
+      const date = new Date(n)
+      return (
+        pad2(date.getMonth() + 1) +
+        '-' +
+        pad2(date.getDate()) +
+        ' ' +
+        pad2(date.getHours()) +
+        ':' +
+        pad2(date.getMinutes())
+      )
+    }
+
+    // ---------------------------------------------------------------- 卡片版本新鲜度
+    // 会话里的卡片是「打开那一刻」的快照。别的端（或这个端的另一个会话）改了这条，
+    // 库里版本号就往前走；手里这份再写就会被 expectedVersion 挡下来（409），
+    // 而用户根本看不出自己拿着旧版 —— 所以提前问一句，过期就把编辑类按钮禁用掉。
+    const CARD_VERSION_TTL = 20_000
+    const cardVersionCache = new Map()
+
+    function cardVersionKey(id, topic) {
+      return String(id || '') + '|' + String(topic || '')
+    }
+
+    function readCardVersion(id, topic) {
+      const key = cardVersionKey(id, topic)
+      const hit = cardVersionCache.get(key)
+      if (!hit) return null
+      if (Date.now() - hit.at > CARD_VERSION_TTL) {
+        cardVersionCache.delete(key)
+        return null
+      }
+      return hit.data
+    }
+
+    function writeCardVersion(id, topic, data) {
+      if (!id || !data) return
+      cardVersionCache.set(cardVersionKey(id, topic), { at: Date.now(), data })
+    }
+
+    /** 库里这条现在是什么版本；拿不到（宿主没重启 / 请求失败）就返回 null —— 不乱禁用。 */
+    async function fetchCardVersion(id, topic) {
+      const cached = readCardVersion(id, topic)
+      if (cached) return cached
+      try {
+        const data = await apiGet('/card/versions', { ids: String(id), topic: String(topic || '') })
+        const info = data && data.versions ? data.versions[id] || null : null
+        if (info) writeCardVersion(id, topic, info)
+        return info
+      } catch {
+        return null
+      }
+    }
+
+    /** 手里这张卡是不是旧版：{ stale, current }。current = 库里现在的版本号。 */
+    function useCardStale(card) {
+      const [state, setState] = useState({ stale: false, current: 0 })
+      const id = card && card.id ? card.id : ''
+      const topic = card && card.topic ? card.topic : ''
+      const version = card && card.version ? card.version : 1
+      useEffect(() => {
+        let alive = true
+        if (!id) return undefined
+        fetchCardVersion(id, topic)
+          .then(info => {
+            if (!alive || !info) return
+            const current = Number(info.version) || 0
+            // 版本号不一样就算旧版：回退会让版本号往回走，单纯比大小会漏判
+            setState({ stale: current !== Number(version), current })
+          })
+          .catch(() => {})
+        return () => {
+          alive = false
+        }
+      }, [id, topic, version])
+      return state
+    }
+
+    /** 模型标签：标题旁边的小圆角块，一眼能看到这次用的是哪个 AI。 */
+    function ModelChip(props) {
+      const model = props.model
+      if (!model) return null
+      // 思考档位也标出来：思考型模型（MiniMax-M3 这类）会把输出预算花在思考上，
+      // 档位一高就容易出现「只有思考、没有正文」。
+      const effort = props.effort ? ' · ' + props.effort : ''
+      return h(
+        'span',
+        { className: 'kb-model-chip', title: translate('workModelTip') },
+        translate('workModel') + ' ' + model + effort,
+      )
+    }
+
+    /** 核实面板：三条路径按「区块」排，一条一块，带编号、标题、一句说明。
+     *
+     * 旧版是「标签 + 按钮」平铺成几行，字号 11.5px，用户反馈太小、分不清三条路径。
+     * 现在改成卡片式：顶部标题条 + 三个区块，AI 结果单独一块用左侧警示线框住。
+     */
+    function VerifySection(props) {
+      const { no, title, desc, children } = props
+      return h(
+        'div',
+        { className: 'kb-vsec' },
+        h(
+          'div',
+          { className: 'kb-vsec-head' },
+          h('span', { className: 'kb-vsec-no' }, no),
+          h('span', { className: 'kb-vsec-title' }, title),
+        ),
+        desc ? h('div', { className: 'kb-vsec-desc' }, desc) : null,
+        children,
+      )
+    }
+
+    function VerifyPanel(props) {
+      const { card, onClose, onSaved } = props
+      const [busy, setBusy] = useState(false)
+      const [err, setErr] = useState('')
+      const [review, setReview] = useState(null)
+      const [cached, setCached] = useState(false)
+      const [source, setSource] = useState('')
+      const [showSource, setShowSource] = useState(false)
+
+      const mark = async (by, note) => {
+        setBusy(true)
+        setErr('')
+        try {
+          const data = await apiPost('/card/verify', { id: card.id, topic: card.topic, state: 'verified', by, note })
+          onSaved({ verified: true, verify: data.verify })
+          onClose()
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : String(e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      /** force=true 跳过缓存（用户主动点「重新校验」时）。 */
+      const runAi = async (force) => {
+        if (!force) {
+          const hit = reviewCacheGet(card, 'verify', (modelInfo && modelInfo.model) || '')
+          if (hit) {
+            setReview(hit)
+            setCached(true)
+            setErr('')
+            return
+          }
+        }
+        setBusy(true)
+        setErr('')
+        try {
+          const data = await apiPost('/card/review', { id: card.id, topic: card.topic, mode: 'verify' })
+          if (!data.ok) {
+            setErr(data.reason || translate('saveFailed'))
+            return
+          }
+          reviewCacheSet(card, 'verify', data)
+          addTokenUsage(data.usage)
+          setReview(data)
+          setCached(false)
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : String(e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const issues = review && Array.isArray(review.issues) ? review.issues : []
+      const aiParseFailed = review !== null && review.parseError === true
+      const aiClean = review !== null && !aiParseFailed && issues.length === 0
+      const modelInfo = useKbModel()
+
+      return h(
+        'div',
+        { className: 'kb-verify' },
+        h(
+          'div',
+          { className: 'kb-verify-cap' },
+          h('span', null, translate('verifyTitle')),
+          h(ModelChip, {
+            model: (review && review.model) || (modelInfo && modelInfo.model) || '',
+            effort: (modelInfo && modelInfo.effort) || '',
+          }),
+          review && review.usage && review.usage.totalTokens
+            ? h(
+                'span',
+                {
+                  className: 'kb-token-note',
+                  title:
+                    '输入 ' +
+                    formatTokens(review.usage.inputTokens) +
+                    '（未命中缓存的部分）· 输出 ' +
+                    formatTokens(review.usage.outputTokens) +
+                    ' · 合计 ' +
+                    formatTokens(review.usage.totalTokens) +
+                    '（合计含缓存命中的输入）',
+                },
+                (cached ? '上次 ' : '本次 ') + formatTokens(review.usage.totalTokens) + ' tokens',
+              )
+            : null,
+          h('span', { className: 'kb-verify-cap-note' }, translate('verifyCapNote')),
+        ),
+
+        // ① 自己确认
+        h(
+          VerifySection,
+          { no: '1', title: translate('verifySelfShort'), desc: translate('verifySelfDesc') },
+          h(
+            'div',
+            { className: 'kb-vsec-act' },
+            h(
+              'button',
+              { className: 'kb-vbtn primary', disabled: busy, onClick: () => mark('user', null) },
+              translate('verifySelfBtn'),
+            ),
+          ),
+        ),
+
+        // ② 让 AI 先查
+        h(
+          VerifySection,
+          { no: '2', title: translate('verifyAiShort'), desc: translate('verifyAiDesc') },
+          h(
+            'div',
+            { className: 'kb-vsec-act' },
+            review === null
+              ? h(
+                  'button',
+                  { className: 'kb-vbtn', disabled: busy, onClick: () => runAi(false) },
+                  busy ? translate('workRunning') : translate('verifyAiBtn'),
+                )
+              : null,
+          ),
+          // 复用缓存结果时给一句提示 + 一个能强制重跑的入口
+          review && cached
+            ? h(
+                'div',
+                { className: 'kb-vsec-act' },
+                h('span', { className: 'kb-cache-note' }, translate('workCachedNote')),
+                h(
+                  'button',
+                  { className: 'kb-vbtn', disabled: busy, onClick: () => runAi(true) },
+                  translate('workRunAgain'),
+                ),
+              )
+            : null,
+          aiClean
+            ? h(
+                'div',
+                { className: 'kb-vsec-act' },
+                h('span', { className: 'kb-vok' }, translate('verifyNoIssue')),
+                h(
+                  'button',
+                  { className: 'kb-vbtn primary', disabled: busy, onClick: () => mark('ai-assisted', null) },
+                  translate('verifyNoIssueBtn'),
+                ),
+              )
+            : null,
+          aiParseFailed
+            ? h(
+                'div',
+                { className: 'kb-vissues' },
+                h('div', { className: 'kb-vissues-cap' }, translate('aiParseFailed')),
+                h('div', { className: 'kb-vissue' }, translate('aiParseFailedHint')),
+                h(
+                  'button',
+                  { className: 'kb-vbtn', onClick: () => runAi(true) },
+                  translate('aiRetry'),
+                ),
+              )
+            : null,
+          issues.length
+            ? h(
+                'div',
+                { className: 'kb-vissues' },
+                h('div', { className: 'kb-vissues-cap' }, translate('verifyIssuesCap') + ' · ' + issues.length),
+                issues.map((issue, index) => h('div', { className: 'kb-vissue', key: 'i' + index }, issue.text)),
+              )
+            : null,
+        ),
+
+        // ③ 附出处
+        h(
+          VerifySection,
+          { no: '3', title: translate('verifySourceShort'), desc: translate('verifySourceDesc') },
+          h(
+            'div',
+            { className: 'kb-vsec-act' },
+            showSource
+              ? null
+              : h(
+                  'button',
+                  { className: 'kb-vbtn', onClick: () => setShowSource(true) },
+                  translate('verifySourceBtn'),
+                ),
+            showSource
+              ? h('input', {
+                  className: 'kb-input kb-verify-input',
+                  value: source,
+                  placeholder: translate('verifySourcePh'),
+                  onChange: (event) => setSource(event.target.value),
+                })
+              : null,
+            showSource
+              ? h(
+                  'button',
+                  { className: 'kb-vbtn primary', disabled: busy || !source.trim(), onClick: () => mark('source', source.trim()) },
+                  translate('verifySourceSave'),
+                )
+              : null,
+            showSource
+              ? h('button', { className: 'kb-vbtn', onClick: () => setShowSource(false) }, translate('workCancel'))
+              : null,
+          ),
+        ),
+
+        err ? h('div', { className: 'kb-err' }, err) : null,
+      )
+    }
+
+    /** 追问区：只带这张卡片 + 这张卡片自己的追问历史（不落库、不进会话上下文）。 */
+    function AskThread(props) {
+      const { card, onClose } = props
+      const [history, setHistory] = useState([])
+      const [question, setQuestion] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [err, setErr] = useState('')
+
+      const send = async () => {
+        const text = question.trim()
+        if (!text || busy) return
+        setBusy(true)
+        setErr('')
+        try {
+          const data = await apiPost('/card/ask', { id: card.id, topic: card.topic, question: text, history })
+          if (!data.ok) {
+            setErr(data.reason || translate('saveFailed'))
+            return
+          }
+          setHistory(list => list.concat([{ q: text, a: data.answer, usage: data.usage || null }]))
+          addTokenUsage(data.usage)
+          setQuestion('')
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : String(e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      return h(
+        'div',
+        { className: 'kb-ask' },
+        h('div', { className: 'kb-work-cap' }, translate('askTitle')),
+        h('div', { className: 'kb-work-note' }, translate('askHint')),
+        history.length === 0 ? h('div', { className: 'kb-work-note' }, translate('askEmpty')) : null,
+        history.map((turn, index) =>
+          h(
+            'div',
+            { className: 'kb-ask-turn', key: 't' + index },
+            h('div', { className: 'kb-ask-q' }, '问：' + turn.q),
+            h('div', { className: 'kb-ask-a' }, '答：' + turn.a),
+            turn.usage && turn.usage.totalTokens
+              ? h(
+                  'div',
+                  { className: 'kb-ask-meta' },
+                  '这次 ' +
+                    formatTokens(turn.usage.totalTokens) +
+                    ' tokens（输入 ' +
+                    formatTokens(turn.usage.inputTokens) +
+                    ' · 输出 ' +
+                    formatTokens(turn.usage.outputTokens) +
+                    '）',
+                )
+              : null,
+          ),
+        ),
+        err ? h('div', { className: 'kb-err' }, err) : null,
+        h(
+          'div',
+          { className: 'kb-ask-input' },
+          h('input', {
+            className: 'kb-input',
+            value: question,
+            placeholder: translate('askPlaceholder'),
+            onChange: (event) => setQuestion(event.target.value),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter') send()
+            },
+          }),
+          h('button', { className: 'kb-btn primary', disabled: busy || !question.trim(), onClick: send }, busy ? translate('workRunning') : translate('askSend')),
+          h('button', { className: 'kb-btn', disabled: !history.length, onClick: () => setHistory([]) }, translate('askClear')),
+          h('button', { className: 'kb-btn', onClick: onClose }, translate('close')),
+        ),
+      )
+    }
+
+    /** 卡片工作台：编辑正文 + 逐条采纳/忽略 + 覆盖前二次确认。 */
+    function Workbench(props) {
+      const { card, autoReview, onClose, onSaved } = props
+      // rawRef 存库里那份（带 **粗体** / `代码` 标记），只用于合并；
+      // 编辑框里放的是去标记后的纯文本，读着舒服，改完再按行合回去。
+      const rawRef = useRef(card.body || '')
+      const [body, setBody] = useState(() => toPlainBody(card.body || ''))
+      const [review, setReview] = useState(null)
+      const [cached, setCached] = useState(false)
+      // 库里那一版（覆盖 / 回退后更新），用来判断"编辑框里现在这份跟库里是不是一样"
+      const [stored, setStored] = useState(() => ({ version: card.version || 1, body: card.body || '' }))
+      const [showCurrent, setShowCurrent] = useState(false)
+      const [busy, setBusy] = useState(false)
+      const [err, setErr] = useState('')
+      const [ok, setOk] = useState('')
+      const [confirm, setConfirm] = useState(false)
+      const [version, setVersion] = useState(card.version || 1)
+      const started = useRef(false)
+
+      const check = contractCheck(body)
+      const modelInfo = useKbModel()
+      // 编辑框里现在这份（= 改完之后要写回去的那份）；跟库里那份不同就是「未保存」
+      const currentBody = mergeMarkup(rawRef.current, body)
+      const dirty = currentBody !== stored.body
+
+      /** force=true 跳过缓存：用户点「重新校验」或上一次解析失败要重试时才走这条路。 */
+      const runReview = async (force) => {
+        const model = (modelInfo && modelInfo.model) || ''
+        if (!force) {
+          const hit = reviewCacheGet(card, 'both', model)
+          if (hit) {
+            setReview(hit)
+            setCached(true)
+            setErr('')
+            return
+          }
+        }
+        setBusy(true)
+        setErr('')
+        try {
+          const data = await apiPost('/card/review', { id: card.id, topic: card.topic, mode: 'both' })
+          if (!data.ok) {
+            setErr(data.reason || translate('saveFailed'))
+            return
+          }
+          reviewCacheSet(card, 'both', data)
+          // 用了几 token 是真实花费，缓存命中不重复计
+          addTokenUsage(data.usage)
+          setReview(data)
+          setCached(false)
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : String(e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      useEffect(() => {
+        if (!autoReview || started.current) return
+        started.current = true
+        runReview(false)
+      }, [autoReview])
+
+      const adopt = (text) => {
+        const bullet = toBullet(toPlainBody(text))
+        if (!bullet) return
+        setBody(prev => (prev.trim() ? prev.replace(/\s*$/, '') + '\n' + bullet : bullet))
+      }
+
+      const apply = async () => {
+        setBusy(true)
+        setErr('')
+        try {
+          const data = await apiPost('/card/apply', {
+            id: card.id,
+            topic: card.topic,
+            // 框里是纯文本，写回前把没改动的行还原成带标记的原样
+            body: mergeMarkup(rawRef.current, body),
+            expectedVersion: version,
+            model: review && review.model ? review.model : null,
+          })
+          setVersion(data.version)
+          setConfirm(false)
+          if (typeof data.body === 'string') {
+            rawRef.current = data.body
+            setBody(toPlainBody(data.body))
+            setStored({ version: data.version || version, body: data.body })
+          }
+          setOk(translate('workSaved') + ' · ' + formatVersion(data.version) + (data.verifyReset ? ' · ' + translate('verifyReset') : ''))
+          onSaved({ version: data.version, body: data.body, verified: false, verify: null })
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : String(e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const checkLine = (label, good) =>
+        h('span', { className: good ? 'yes' : 'no' }, (good ? '✓ ' : '✕ ') + label)
+
+      const rollback = async () => {
+        setBusy(true)
+        setErr('')
+        try {
+          const data = await apiPost('/card/rollback', { id: card.id, topic: card.topic })
+          rawRef.current = data.body
+          setBody(toPlainBody(data.body))
+          setVersion(data.version)
+          setStored({ version: data.version, body: data.body })
+          setOk(translate('rollbackDone') + ' · ' + formatVersion(data.version))
+          onSaved({ version: data.version, body: data.body, verified: false, verify: null })
+        } catch (e) {
+          setErr(e instanceof Error ? e.message : String(e))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      return h(
+        'div',
+        { className: 'kb-verify kb-workpanel' },
+        h(
+          'div',
+          { className: 'kb-verify-cap' },
+          h('span', null, translate('workTitle')),
+          // 校验用的是「当前会话选的模型」，这里把它标成醒目的标签，
+          // 用户才知道对齐没对齐（数据优先取本次结果，其次取面板打开时问到的选择）
+          h(ModelChip, {
+            model: (review && review.model) || (modelInfo && modelInfo.model) || '',
+            effort: (modelInfo && modelInfo.effort) || '',
+          }),
+          review && review.usage && review.usage.totalTokens
+            ? h(
+                'span',
+                {
+                  className: 'kb-token-note',
+                  title:
+                    '输入 ' +
+                    formatTokens(review.usage.inputTokens) +
+                    '（未命中缓存的部分）· 输出 ' +
+                    formatTokens(review.usage.outputTokens) +
+                    ' · 合计 ' +
+                    formatTokens(review.usage.totalTokens) +
+                    '（合计含缓存命中的输入）',
+                },
+                (cached ? '上次 ' : '本次 ') + formatTokens(review.usage.totalTokens) + ' tokens',
+              )
+            : null,
+          h('span', { className: 'kb-verify-cap-note' }, translate('workCapNote')),
+          h(
+            'button',
+            { className: 'kb-vbtn', disabled: busy, onClick: () => runReview(true) },
+            busy ? translate('workRunning') : review ? translate('workRunAgain') : translate('workRun'),
+          ),
+          // 复用上次结果时必须说一声，否则用户会以为又调了一次模型
+          review && cached ? h('span', { className: 'kb-cache-note' }, translate('workCachedNote')) : null,
+          h('button', { className: 'kb-vbtn', onClick: onClose }, translate('close')),
+        ),
+
+        // 模型没按 JSON 回答：必须明说，不能让它看起来像「AI 没发现问题」。
+        // 2026-10-22 实测 DeepSeek 返回了非 JSON 的解释文字，旧的静默处理把
+        // 「解析失败」显示成「没有发现」，等于骗用户这条已经查过了。
+        review && review.parseError
+          ? h(
+              VerifySection,
+              { no: '!', title: translate('aiParseFailed'), desc: translate('aiParseFailedHint') },
+              review.rawPreview
+                ? h('div', { className: 'kb-add kb-raw' }, review.rawPreview)
+                : null,
+              h(
+                'div',
+                { className: 'kb-vsec-act' },
+                h('button', { className: 'kb-vbtn primary', disabled: busy, onClick: () => runReview(true) }, translate('aiRetry')),
+              ),
+            )
+          : null,
+
+        // ① AI 发现的问题：一条一块，可逐条忽略
+        review && !review.parseError && review.issues && review.issues.length
+          ? h(
+              VerifySection,
+              {
+                no: '1',
+                title: translate('workIssues') + ' · ' + review.issues.length,
+                desc: translate('workIssuesDesc'),
+              },
+              h(
+                'div',
+                { className: 'kb-vissues' },
+                review.issues.map((issue, index) =>
+                  h(
+                    'div',
+                    { className: 'kb-addrow', key: 'i' + index },
+                    h('span', { className: 'kb-vissue kb-grow' }, issue.text),
+                    h(
+                      'button',
+                      {
+                        className: 'kb-vbtn',
+                        onClick: () => setReview({ ...review, issues: review.issues.filter((_, i) => i !== index) }),
+                      },
+                      translate('workIgnore'),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          : null,
+
+        // ② 可以补进卡片的要点：采纳 = 追加成一条 "- " 要点
+        // 解析成功就一定显示这块，没有内容时给一句「没找到可补充的」——
+        // 沉默会让用户分不清「AI 觉得没啥可补」和「功能坏了」。
+        review && !review.parseError
+          ? h(
+              VerifySection,
+              {
+                no: '2',
+                title: translate('workAdditions') + ' · ' + review.additions.length,
+                desc: translate('workAdditionsDesc'),
+              },
+              review.additions.length === 0
+                ? h('div', { className: 'kb-work-note' }, translate('workNoAdditions'))
+                : review.additions.map((addition, index) =>
+                    h(
+                      'div',
+                      { className: 'kb-addrow', key: 'a' + index },
+                      h('span', { className: 'kb-add kb-grow' }, toPlainBody(addition.text)),
+                      h('button', { className: 'kb-vbtn primary', onClick: () => adopt(addition.text) }, translate('workAdopt')),
+                      h(
+                        'button',
+                        {
+                          className: 'kb-vbtn',
+                          onClick: () => setReview({ ...review, additions: review.additions.filter((_, i) => i !== index) }),
+                        },
+                        translate('workIgnore'),
+                      ),
+                    ),
+                  ),
+            )
+          : null,
+
+        // ③ AI 建议的改写：整段替换，属于重手，单独一块
+        review && review.suggested
+          ? h(
+              VerifySection,
+              { no: '3', title: translate('workSuggested'), desc: translate('workSuggestedDesc') },
+              h('div', { className: 'kb-add' }, toPlainBody(review.suggested)),
+              h(
+                'div',
+                { className: 'kb-vsec-act' },
+                h(
+                  'button',
+                  { className: 'kb-vbtn', onClick: () => setBody(toPlainBody(review.suggested)) },
+                  translate('workUseSuggested'),
+                ),
+              ),
+            )
+          : null,
+
+        // ④ 正文：直接改，实时跑格式自检
+        h(
+          VerifySection,
+          { no: '4', title: translate('workBody'), desc: translate('workBodyDesc') },
+          h('textarea', {
+            className: 'kb-textarea kb-work-body',
+            value: body,
+            rows: 9,
+            onChange: (event) => setBody(event.target.value),
+          }),
+          h(
+            'div',
+            { className: 'kb-check' },
+            checkLine(translate('workCheckLead'), check.lead),
+            checkLine(translate('workCheckBullet'), check.bullet),
+            checkLine(translate('workCheckBacktick'), check.backtick),
+            checkLine(translate('workCheckBracket'), check.bracket),
+          ),
+        ),
+
+        // ⑤ 当前版本：用户要看的是**改完之后**这一版（编辑框里的内容），
+        //    不是库里那份旧的；两者不一样时明确标「未保存的修改」。
+        showCurrent
+          ? h(
+              'div',
+              { className: 'kb-current' },
+              h(
+                'div',
+                { className: 'kb-current-cap' },
+                h(
+                  'span',
+                  null,
+                  dirty
+                    ? translate('workCurrentDirty') + formatVersion(stored.version)
+                    : translate('workCurrentSaved') + formatVersion(stored.version),
+                ),
+                h('span', { className: 'kb-grow' }),
+                h('button', { className: 'kb-vbtn', onClick: () => setShowCurrent(false) }, translate('workViewCurrentHide')),
+              ),
+              h(BodyBlocks, { body: currentBody }),
+            )
+          : null,
+
+        err ? h('div', { className: 'kb-err' }, err) : null,
+        ok ? h('div', { className: 'kb-ok' }, ok) : null,
+
+        confirm
+          ? h(
+              'div',
+              { className: 'kb-vsec-act' },
+              h('span', { className: 'kb-work-note' }, translate('workApplyConfirm')),
+              h('button', { className: 'kb-vbtn primary', disabled: busy, onClick: apply }, translate('workApply')),
+              h('button', { className: 'kb-vbtn', onClick: () => setConfirm(false) }, translate('workCancel')),
+            )
+          : h(
+              'div',
+              { className: 'kb-vsec-act' },
+              h(
+                'button',
+                { className: 'kb-vbtn primary', disabled: busy || check.empty, onClick: () => setConfirm(true) },
+                translate('workApply'),
+              ),
+              h('button', { className: 'kb-vbtn', disabled: busy, onClick: rollback }, translate('rollback')),
+              h(
+                'button',
+                { className: 'kb-vbtn', onClick: () => setShowCurrent(!showCurrent) },
+                showCurrent ? translate('workViewCurrentHide') : translate('workViewCurrent'),
+              ),
+              h('button', { className: 'kb-vbtn', onClick: onClose }, translate('workCancel')),
+            ),
+      )
+    }
+
+    /** 会话里的一张知识卡片：正文 + 三个动作 + 就地展开的工作台/追问/核实。 */
+    function ChatCard(props) {
+      const { card, onSaved } = props
+      const [panel, setPanel] = useState('')
+      // 这份快照是不是已经过期（别的端改过了）：过期就禁用会写库的按钮
+      const stale = useCardStale(card)
+
+      const update = (patch) => {
+        // 自己刚写回过：库里版本就是新的，别再把它当成过期卡
+        if (patch && patch.version) writeCardVersion(card.id, card.topic, { version: patch.version })
+        if (onSaved) onSaved(patch)
+      }
+
+      return h(
+        'article',
+        { className: 'kb-chat-card', style: { '--kb-tc': topicColor(card.topic) } },
+        h(
+          'div',
+          { className: 'kb-chat-head' },
+          h('span', { className: 'kb-chat-title' }, card.title),
+          card.topicName ? h('span', { className: 'kb-chat-topic' }, card.topicName) : null,
+          h(VerifyBadge, { card, onToggle: () => setPanel(panel === 'verify' ? '' : 'verify') }),
+        ),
+        h('div', { className: 'kb-chat-body' }, h(BodyBlocks, { body: card.body })),
+        card.tags && card.tags.length
+          ? h(
+              'div',
+              { className: 'kb-tags' },
+              card.tags.slice(0, 4).map(tag => h('span', { className: 'kb-tag', key: tag }, tag)),
+            )
+          : null,
+        h(
+          'div',
+          { className: 'kb-chat-foot' },
+          h('span', { className: 'kb-score' }, shortVersion(card.version || 1)),
+          // 这份快照已经过期（别的端改过这条）：说清楚，并禁用会写库的按钮
+          stale.stale
+            ? h(
+                'span',
+                { className: 'kb-stale-note', title: translate('actStaleHint') },
+                translate('actStaleNote') + ' ' + formatVersion(stale.current || card.version || 1),
+              )
+            : null,
+          h('span', { className: 'kb-grow' }),
+          // 没有 id 的卡片是「还没落盘」的预览：没有可操作的对象，就不给动作
+          card.id
+            ? h(
+                'span',
+                { className: 'kb-work-row' },
+                h(
+                  'button',
+                  {
+                    className: 'kb-mini',
+                    disabled: stale.stale,
+                    title: stale.stale ? translate('actStaleHint') : '',
+                    onClick: () => setPanel(panel === 'work' ? '' : 'work'),
+                  },
+                  translate('actReview'),
+                ),
+                h(
+                  'button',
+                  {
+                    className: 'kb-mini',
+                    disabled: stale.stale,
+                    title: stale.stale ? translate('actStaleHint') : '',
+                    onClick: () => setPanel(panel === 'edit' ? '' : 'edit'),
+                  },
+                  translate('actEdit'),
+                ),
+                h('button', { className: 'kb-mini', onClick: () => setPanel(panel === 'ask' ? '' : 'ask') }, translate('actAsk')),
+              )
+            : h('span', { className: 'kb-work-note' }, translate('chatSaving')),
+        ),
+        panel === 'work' ? h(Workbench, { card, autoReview: true, onClose: () => setPanel(''), onSaved: update }) : null,
+        panel === 'edit' ? h(Workbench, { card, autoReview: false, onClose: () => setPanel(''), onSaved: update }) : null,
+        panel === 'ask' ? h(AskThread, { card, onClose: () => setPanel('') }) : null,
+        panel === 'verify' ? h(VerifyPanel, { card, onClose: () => setPanel(''), onSaved: update }) : null,
+      )
+    }
+
+    // ------------------------------------------------ 回答下方那一排（turnTail）
+    //
+    // 为什么不只靠工具行：工具行在「过程组」里，standard/detailed 档在这一轮答完后
+    // 把整组 outerHidden（不是折叠，是不渲染），所以答完就看不见卡片了。
+    // conversation.chat.turnTail 是宿主给「回答下方的功能条」留的 list 槽
+    // （交付物卡片、计划、定时任务提醒都挂在那），纯增量、replaceRisk: none，
+    // 而且永远在过程组外面 —— 卡片放这里才是「问完就能看见」。
+    //
+    // 数据怎么来：照官方 schedule-created 那张卡片的做法 —— 注册一个 Turn
+    // Definition，把 learn_* 结果里的 kbCards 发布到这一轮的 turn.data 上，
+    // turnTail 用 turn.data.get(kind) 读回来。
+    // （不要用 useChat 读 chat snapshot：turn 是 TurnLocation 对象，不是数字键，
+    //   而且 snapshot 的字段形状不是公开契约。）
+
+    /** 稳定的空数组：没命中时返回同一个引用，避免无意义重渲染。 */
+    const EMPTY_CARDS = Object.freeze([])
+
+    /** 我们的 Turn Definition 在「这一轮」上占的 key。 */
+    const KB_TURN_KIND = 'kb-cards'
+
+    /**
+     * 把知识卡片挂到「这一轮」上的 Turn Definition。
+     *
+     * 匹配方式：直接看 tool/result 事件的 data.meta.kbCards —— 只有我们的
+     * learn_search / learn_save 会带这个字段，所以不需要再记调用名去过滤。
+     */
+    const kbTurnDefinition = {
+      kind: KB_TURN_KIND,
+      match(event) {
+        if (!event || typeof event !== 'object') return null
+        if (event.type === 'turn/start') return { id: String(event.data.turn), role: 'start' }
+        // 只认 append 的 tool/result：replacement window 里的旧事件不该重复计入
+        if (event.type === 'tool/result' && event.surfaceOp === 'append') {
+          return { id: String(event.data.turn), role: 'update' }
+        }
+        return null
+      },
+      start(_context, match) {
+        return { turn: match.event.data.turn, entries: [] }
+      },
+      update(context, match) {
+        const state = context.state
+        if (!state) return state
+        const event = match.event
+        const meta = event.data ? event.data.meta : null
+        const cards = meta && Array.isArray(meta.kbCards) ? meta.kbCards : null
+        const related = meta && Array.isArray(meta.kbRelated) ? meta.kbRelated : null
+        // 检索重排的 token 用量：跟命中卡片同一次检索的结果
+        const tokens = meta && meta.kbTokens && typeof meta.kbTokens === 'object' ? meta.kbTokens : null
+        // 命中和相关补充是一起发布的（同一次 learn_search 的重排结果），
+        // 所以只要有任意一组就记一条 entry。
+        const hasCards = cards && cards.length > 0
+        const hasRelated = related && related.length > 0
+        if (!hasCards && !hasRelated) return state
+        return {
+          ...state,
+          entries: [
+            ...state.entries,
+            { seq: event.seq, cards: hasCards ? cards : EMPTY_CARDS, related: hasRelated ? related : EMPTY_CARDS, tokens },
+          ],
+        }
+      },
+      buildLocationData(context, scope, previous) {
+        if (scope !== 'turn' || !context.state) return null
+        if (previous && previous.kind === 'turn' && previous.key === KB_TURN_KIND && previous.value.entries === context.state.entries) {
+          return previous
+        }
+        return { kind: 'turn', turn: context.state.turn, key: KB_TURN_KIND, value: { entries: context.state.entries } }
+      },
+    }
+
+    /** 稳定的空 payload：没命中时返回同一个引用。 */
+    const EMPTY_PAYLOAD = Object.freeze({ cards: EMPTY_CARDS, related: EMPTY_CARDS, rerankTokens: 0 })
+
+    /**
+     * 从这一轮的 Turn Definition 数据里取卡片，按 turn 结束位置截断。
+     * 返回 { cards, related } 两组：命中在前，相关补充在后（界面里折叠）。
+     */
+    function turnPayloadOf(props) {
+      try {
+        const { turn, seq } = props || {}
+        if (!turn || !turn.data || typeof turn.data.get !== 'function') return EMPTY_PAYLOAD
+        const data = turn.data.get(KB_TURN_KIND)
+        if (!data || !Array.isArray(data.entries) || data.entries.length === 0) return EMPTY_PAYLOAD
+        const bound = turn.end && typeof turn.end.seq === 'number' ? turn.end.seq : seq
+        const cards = []
+        const related = []
+        let rerankTokens = 0
+        for (const entry of data.entries) {
+          if (!entry) continue
+          if (typeof bound === 'number' && typeof entry.seq === 'number' && entry.seq > bound) continue
+          if (Array.isArray(entry.cards)) for (const card of entry.cards) cards.push(card)
+          if (Array.isArray(entry.related)) for (const card of entry.related) related.push(card)
+          const spent = entry.tokens && entry.tokens.rerank ? Number(entry.tokens.rerank.totalTokens) : 0
+          if (Number.isFinite(spent) && spent > 0) rerankTokens += spent
+        }
+        if (cards.length === 0 && related.length === 0) return EMPTY_PAYLOAD
+        return { cards, related, rerankTokens }
+      } catch {
+        // 宿主内部结构变了就安静地不渲染，绝不能把会话搞坏
+        return EMPTY_PAYLOAD
+      }
+    }
+
+    /** 兼容旧名：只要命中卡片的场景（面板/测试）继续用这个。 */
+    function turnCardsOf(props) {
+      return turnPayloadOf(props).cards
+    }
+
+    /**
+     * 回答下方那一排：命中卡片列出来，相关补充排在后面并默认收缩。
+     *
+     * 收缩而不是不显示：这些条目是模型判定的"同领域但不是答案"，用户可能想看，
+     * 但默认展开会把真正的答案挤下去 —— 所以给一行可以点的标题。
+     */
+    function TurnTailCards(props) {
+      const [all, setAll] = useState(false)
+      const [showRelated, setShowRelated] = useState(false)
+      const { cards, related, rerankTokens } = turnPayloadOf(props)
+      if (cards.length === 0 && related.length === 0) return null
+      const shown = all ? cards : cards.slice(0, 3)
+      const headBits = []
+      if (cards.length) headBits.push('知识库命中 ' + cards.length + ' 条')
+      if (related.length) headBits.push('相关 ' + related.length + ' 条')
+      if (rerankTokens > 0) headBits.push('重排 ' + formatTokens(rerankTokens) + ' tokens')
+      return h(
+        'div',
+        { className: 'kb-stack kb-turn' },
+        h(
+          'div',
+          { className: 'kb-stack-head kb-turn-head' },
+          h('span', null, headBits.join(' · ')),
+          cards.length > 3
+            ? h(
+                'button',
+                { className: 'kb-mini', onClick: () => setAll(!all) },
+                all ? translate('collapseAll') : translate('expandAll') + ' ' + cards.length,
+              )
+            : null,
+        ),
+        shown.map((card, index) =>
+          h(ChatCard, {
+            key: card.id || 'tc' + index,
+            card,
+          }),
+        ),
+        related.length
+          ? h(
+              'div',
+              { className: 'kb-related' },
+              h(
+                'button',
+                {
+                  className: 'kb-related-head',
+                  onClick: () => setShowRelated(!showRelated),
+                  'aria-expanded': showRelated ? 'true' : 'false',
+                },
+                h('span', { className: 'kb-related-caret' }, showRelated ? '▾' : '▸'),
+                h('span', null, '相关知识点 ' + related.length + ' 条'),
+              ),
+              showRelated
+                ? related.map((card, index) =>
+                    h(ChatCard, {
+                      key: 'rel-' + (card.id || index),
+                      card,
+                    }),
+                  )
+                : null,
+            )
+          : null,
+      )
+    }
+
+        /** 工具结果里的卡片堆：默认 Top 3，可展开全部。 */
+    function ChatCards(props) {
+      const { block, phase, toolName } = props
+      const [items, setItems] = useState([])
+      const [fallback, setFallback] = useState(null)
+      const [loading, setLoading] = useState(false)
+
+      const fromMeta = phase === 'result' ? cardsOf(block) : []
+
+      useEffect(() => {
+        if (phase !== 'result') return
+        setItems(fromMeta)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [block, phase])
+
+      // 兜底：万一宿主没把 meta 带过来，用工具入参里的检索词再查一次
+      useEffect(() => {
+        if (phase !== 'result' || fromMeta.length) return undefined
+        if (toolName !== 'learn_search') return undefined
+        const query = queryOfArgs(block)
+        if (!query) return undefined
+        const controller = new AbortController()
+        setLoading(true)
+        apiGet('/search', { q: query, topic: 'all', limit: 3 }, controller.signal)
+          .then(data => {
+            if (controller.signal.aborted) return
+            setFallback(
+              (data.hits || []).map(hit => ({
+                id: hit.id,
+                title: hit.title,
+                body: hit.body,
+                topic: hit.topic,
+                topicName: hit.topicName || hit.topic,
+                tags: hit.tags || [],
+                verified: hit.verified ?? false,
+                version: hit.version || 1,
+              })),
+            )
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (!controller.signal.aborted) setLoading(false)
+          })
+        return () => controller.abort()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+      }, [block, phase, toolName, fromMeta.length])
+
+      if (phase !== 'result') {
+        return h('div', { className: 'kb-chat-note' }, toolName === 'learn_save' ? translate('chatSaving') : translate('chatSearching'))
+      }
+
+      const list = items.length ? items : fallback || []
+      const relatedCount = relatedCardsOf(block).length
+      if (!list.length && !relatedCount) {
+        return loading ? h('div', { className: 'kb-chat-note' }, translate('chatSearching')) : h('div', { className: 'kb-chat-note' }, translate('chatNoHit'))
+      }
+
+      // 过程组里只留一行文字。
+      // 为什么不再在这里渲染卡片：过程组（工具行）在 standard/detailed 档、这一轮
+      // 答完之后会被整组隐藏，卡片放这儿等于答完就看不见；而回答下方的 turnTail
+      // 才是常驻位置。两处都渲染又会让同一批卡片出现两次。所以这里退化成一句计数，
+      // 真正的卡片交给 TurnTailCards。文案保持中性 —— 不承诺"卡片在下方"，
+      // 免得哪天卡片条坏了这行字跟着说谎。
+      const bits = []
+      if (list.length) bits.push('知识库命中 ' + list.length + ' 条')
+      if (relatedCount) bits.push('相关 ' + relatedCount + ' 条')
+      return h('div', { className: 'kb-chat-note' }, bits.join(' · '))
+    }
+
     function apply(ctx) {
       // 注意：宿主会热重载浏览器半侧（bundle 改了就重新 apply）。所以这里
       // 每个注册动作都必须可重入，否则第二次 apply 抬错就会把整个插件搞掉。
@@ -1341,12 +3084,87 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           (props) => h(BookIcon, { size: props && props.size }),
         ),
       )
+
+      // 会话里的知识卡片：learn_search / learn_save 的结果按 wire 工具名注册自己的行。
+      // 官方 skill 工具用的是同一个 keyed slot（key 域是开放的，写自己的工具名即可）。
+      try {
+        ctx.slots.inject('tool.call.toolview', () =>
+          ctx.slots.register({ name: 'tool.call.toolview', key: 'learn_search' }, ChatCards),
+        )
+        ctx.slots.inject('tool.call.toolview', () =>
+          ctx.slots.register({ name: 'tool.call.toolview', key: 'learn_save' }, ChatCards),
+        )
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[learning-kb] 会话卡片注册失败：' + describeError(error))
+      }
+
+      // 回答下方那一排：知识库命中时把卡片列出来。
+      // 这是「答完也能看见」的唯一位置 —— 工具行在过程组里，答完会被整组隐藏。
+      try {
+        ctx.slots.inject('conversation.chat.turnTail', () =>
+          ctx.slots.register(
+            { name: 'conversation.chat.turnTail', id: 'learning-kb', label: '知识库卡片', order: 10 },
+            TurnTailCards,
+          ),
+        )
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[learning-kb] 回答下方卡片注册失败：' + describeError(error))
+      }
+
+      // 卡片挂到「这一轮」上：Turn Definition 把 learn_* 结果里的 kbCards 发布到
+      // turn.data，turnTail 才能读到。
+      //
+      // 时序陷阱（踩过）：uiConversation 是 ui-conversation 插件 provide 的服务，
+      // 我们的 apply() 可能比它先跑完。Cordis 的 ctx.get() 是「不管 inject 直接读
+      // 服务表」，服务还没被 provide 时就是 undefined —— 旧代码在这种情况下静默
+      // 跳过了注册，于是 turn.data 永远是空的，回答下方一张卡片都不出来。
+      // 所以：先试即时注册；拿不到就交给 ctx.inject(['uiConversation'], …) 挂起，
+      // 等 Cordis 在服务就绪时回调。挂起的只有"下方卡片条"这一块，面板、工具行、
+      // 侧边栏都不受影响。
+      try {
+        const attach = (uiConversation) => {
+          const events = uiConversation && uiConversation.events
+          if (!events || typeof events.register !== 'function') return null
+          const dispose = events.register(kbTurnDefinition)
+          return () => {
+            if (typeof dispose === 'function') dispose()
+          }
+        }
+        const immediate = typeof ctx.get === 'function' ? ctx.get('uiConversation') : null
+        const dispose = attach(immediate)
+        if (dispose) {
+          if (typeof ctx.effect === 'function') {
+            ctx.effect(() => dispose, 'learning-kb: kb-cards turn definition')
+          }
+        } else if (typeof ctx.inject === 'function') {
+          ctx.inject(['uiConversation'], (scoped) => {
+            const ui =
+              (scoped && scoped.uiConversation) ||
+              (scoped && typeof scoped.get === 'function' ? scoped.get('uiConversation') : null)
+            attach(ui)
+          })
+        } else if (typeof console !== 'undefined') {
+          console.warn('[learning-kb] uiConversation 不可用：回答下方的卡片条关闭')
+        }
+      } catch (error) {
+        if (typeof console !== 'undefined') console.warn('[learning-kb] 卡片 Turn Definition 注册失败：' + describeError(error))
+      }
     }
 
     exports.name = 'learning-kb-ui'
     exports.inject = ['slots', 'locale']
     exports.apply = apply
     exports.parseBody = parseBody
+    exports.toPlainBody = toPlainBody
+    exports.mergeMarkup = mergeMarkup
+    exports.reviewCacheKey = reviewCacheKey
+    exports.reviewCacheGet = reviewCacheGet
+    exports.reviewCacheSet = reviewCacheSet
+    exports.reviewCacheClear = reviewCacheClear
+    exports.addTokenUsage = addTokenUsage
+    exports.clearCardVersionCache = () => cardVersionCache.clear()
+    exports.readTokenTotal = readTokenTotal
+    exports.formatTokens = formatTokens
     }
 
     /** 把任意抛出物整理成可以贴进面板的文本 */

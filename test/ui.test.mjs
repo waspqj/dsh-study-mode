@@ -175,14 +175,16 @@ await check('空查询返回空 hits', async () => {
 })
 
 console.log('写接口：改 / 归档 / 恢复 / 删')
-await check('改标题会升版本号', async () => {
+await check('改标题会升版本号（版本号 = 时间戳）', async () => {
+  const before = (await get('/entries', '?topic=mysql-进阶')).json.entries.find((item) => item.id === addedId).version
   const res = await post('/update', {
     topic: 'mysql-进阶',
     id: addedId,
     fields: { title: 'ReadView 的 4 个字段' },
   })
   assert.equal(res.statusCode, 200, res.body)
-  assert.equal(res.json.version, 2)
+  assert.ok(res.json.version >= 1e12, '版本号应该是时间戳：' + res.json.version)
+  assert.ok(res.json.version > Number(before), '新版本号要比旧的大')
   const list = await get('/entries', '?topic=mysql-进阶')
   assert.equal(list.json.entries[0].title, 'ReadView 的 4 个字段')
 })

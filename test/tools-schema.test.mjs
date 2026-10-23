@@ -133,14 +133,14 @@ await check('learn_topics action=use 遇到不存在的主题会报错，不建�
 })
 await check('learn_search 指定不存在的主题只给提示，不建空主题', async () => {
   const before = topics.execute({ action: 'list' }, exec).topics.length
-  const result = search.execute({ query: '间隙锁', topic: '不存在的幽灵主题' }, exec)
+  const result = await search.execute({ query: '间隙锁', topic: '不存在的幽灵主题' }, exec)
   assert.equal(result.needTopic, true)
   assert.equal(result.hits.length, 0)
   const after = topics.execute({ action: 'list' }, exec).topics.length
   assert.equal(after, before, '检索不该新建主题')
 })
 await check('learn_search 指定存在的主题能正常检索', async () => {
-  const result = search.execute({ query: '间隙锁', topic: '测试主题' }, exec)
+  const result = await search.execute({ query: '间隙锁', topic: '测试主题' }, exec)
   assert.equal(result.needTopic, undefined)
   assert.equal(result.scope, '测试主题')
 })

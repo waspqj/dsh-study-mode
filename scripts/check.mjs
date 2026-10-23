@@ -115,6 +115,10 @@ const required = [
   'scope=auto',
   '写库只用 learn_save',
   '确认框',
+  // 2026-10-22：回答里自发补了一张大对照表，用户要求「这类展开只出现在 AI 校验补充里」
+  '不许自发改写',
+  '对照表',
+  '3 句以内',
 ]
 for (const marker of required) {
   if (!patch.includes(marker)) fail(`persona 缺少关键规则：${marker}`)
@@ -263,6 +267,176 @@ if (!fs.existsSync(clientEntry)) {
   for (const match of clientSource.matchAll(/require\((['"])([^'"]+)\1\)/g)) {
     if (!allowed.has(match[2])) {
       fail(`client/index.js 里 require('${match[2]}') 不在宿主提供的模块清单里，浏览器会解析失败`)
+    }
+  }
+}
+
+// 7. 会话内卡片的三处接线：工具的 presentationMeta、宿主的卡片接口、浏览器的工具视图
+//    （少一处就是「对话里没有卡片」或「点了没反应」）
+const toolsSource = fs.readFileSync(path.join(root, 'plugin', 'tools.js'), 'utf8')
+if (!toolsSource.includes('presentationMeta')) {
+  fail('plugin/tools.js 没有 presentationMeta：结构化卡片到不了浏览器（宿主只把 render 的文本发给界面）')
+}
+if (!toolsSource.includes('kbCards')) {
+  fail('plugin/tools.js 的 presentationMeta 没有产出 kbCards：浏览器拿不到卡片数据')
+}
+// 大模型重排：宿主侧必须真的接上，并且必须带回 kbRelated 与降级原因
+if (!toolsSource.includes('rerankHits')) {
+  fail('plugin/tools.js 没有调用 rerankHits：检索还是纯文字匹配，同义词永远对不上')
+}
+if (!toolsSource.includes('kbRelated')) {
+  fail('plugin/tools.js 的 presentationMeta 没有产出 kbRelated：相关补充卡片到不了界面')
+}
+if (!fs.existsSync(path.join(root, 'plugin', 'rerank.js'))) {
+  fail('缺少 plugin/rerank.js：重排层没有落点')
+}
+{
+  const rerankSource = fs.readFileSync(path.join(root, 'plugin', 'rerank.js'), 'utf8')
+  if (!rerankSource.includes('fallbackSplit')) {
+    fail('plugin/rerank.js 没有降级路径：模型抽风时会连卡片一起没了')
+  }
+  if (!rerankSource.includes("DSH_KB_RERANK")) {
+    fail('plugin/rerank.js 没有关闭开关：离线/调试时没法跳过重排')
+  }
+}
+const cardSource = fs.readFileSync(path.join(root, 'plugin', 'card.js'), 'utf8')
+if (!cardSource.includes('buildReviewPrompt') || !cardSource.includes('buildAskPrompt')) {
+  fail('plugin/card.js 缺少提示词拼装：校验与追问的上下文隔离会失控')
+}
+if (!fs.existsSync(path.join(root, 'plugin', 'llm.js'))) {
+  fail('缺少 plugin/llm.js：隔离的模型调用没有落点')
+}
+const uiSource = fs.readFileSync(path.join(root, 'plugin', 'index.js'), 'utf8')
+for (const route of ['/card/review', '/card/apply', '/card/ask', '/card/verify', '/card/rollback']) {
+  if (!uiSource.includes(route)) fail(`plugin/index.js 缺少卡片接口 ${route}`)
+}
+// 过期卡片：会话里的快照可能已经被别的端改过，界面要提前知道并禁用编辑类按钮
+if (!uiSource.includes('/card/versions')) {
+  fail('plugin/index.js 缺少 /card/versions：界面没法知道手里这张卡是不是旧版')
+}
+// 版本号规则（2026-10-23 用户定）：时间戳，回退时连版本号一起回原版
+const storeSource = fs.readFileSync(path.join(root, 'plugin', 'store.js'), 'utf8')
+for (const bit of ['stampVersion', 'nextVersion', 'originalVersion']) {
+  if (!storeSource.includes(bit)) {
+    fail(`plugin/store.js 缺少 ${bit}：版本号不是时间戳 / 回退时版本号回不去`)
+  }
+}
+const formatSource = fs.readFileSync(path.join(root, 'plugin', 'format.js'), 'utf8')
+for (const bit of ['formatVersion', 'shortVersion']) {
+  if (!formatSource.includes(bit)) {
+    fail(`plugin/format.js 缺少 ${bit}：时间戳版本号显示不出来`)
+  }
+}
+const llmSource = fs.readFileSync(path.join(root, 'plugin', 'llm.js'), 'utf8')
+if (!llmSource.includes("ctx.get('llm')") && !llmSource.includes('ctx.get("llm")')) {
+  fail('plugin/llm.js 没有软探测 llm 服务：模型不可用时应该降级，而不是整块插件起不来')
+}
+// 2026-10-22：模型选择写死过一次，用户切了模型校验还用老的。
+// 必须每次调用都去问宿主的 agentDefaultModel，而不是用常量。
+if (!llmSource.includes("get('agentDefaultModel')")) {
+  fail('plugin/llm.js 没有读宿主的 agentDefaultModel：校验用的模型不会跟当前会话对齐')
+}
+if (!llmSource.includes('resolveSelection')) {
+  fail('plugin/llm.js 缺少 resolveSelection：模型选择无法按调用时解析')
+}
+// token 用量：必须从 llm.stream 的 usage chunk 里收，界面才有得显示
+for (const bit of ['normalizeUsage', 'mergeUsage', "'usage'"]) {
+  if (!llmSource.includes(bit)) {
+    fail(`plugin/llm.js 缺少 ${bit}：收不到 token 用量，界面上就没法显示花了多少`)
+  }
+}
+// 换模型后不能又变成「模型没有返回内容」：
+//   · block-end（整块正文）也要认 —— pi-ai 适配器（MiniMax 走这条）不一定给 text-delta
+//   · 只有思考没有正文时，要说清是 maxTokens 被思考吃掉了
+for (const bit of ['block-end', 'reasoning-delta', 'noText']) {
+  if (!llmSource.includes(bit)) {
+    fail(`plugin/llm.js 缺少 ${bit}：思考型模型下会一直「模型没有返回内容」`)
+  }
+}
+if (!uiSource.includes('usage')) {
+  fail('plugin/index.js 没把 usage 带出去：校验 / 追问的 token 用量到不了界面')
+}
+if (!toolsSource.includes('kbTokens')) {
+  fail('plugin/tools.js 没把检索重排的用量发出去：搜索那部分花的钱用户看不到')
+}
+{
+  const clientText = fs.readFileSync(path.join(root, 'client', 'index.js'), 'utf8')
+  if (!clientText.includes("'tool.call.toolview'")) {
+    fail('client/index.js 没有注册 tool.call.toolview：对话里的工具结果不会出现知识卡片')
+  }
+  for (const key of ['learn_search', 'learn_save']) {
+    if (!clientText.includes(`key: '${key}'`)) {
+      fail(`client/index.js 没有为 ${key} 注册工具卡片视图`)
+    }
+  }
+  if (!clientText.includes('kbCards')) {
+    fail('client/index.js 没有读 kbCards：拿不到工具结果里的结构化卡片')
+  }
+  // 工具行在「过程组」里，答完会被整组隐藏；回答下方那一排才是「答完也能看见」的位置
+  if (!clientText.includes("'conversation.chat.turnTail'")) {
+    fail('client/index.js 没有注册 conversation.chat.turnTail：答完就看不见卡片了')
+  }
+  if (!clientText.includes('kbTurnDefinition') || !clientText.includes("events.register(kbTurnDefinition)")) {
+    fail('client/index.js 没有注册 kb-cards Turn Definition：回答下方永远拿不到卡片')
+  }
+  if (!clientText.includes('turnCardsOf')) {
+    fail('client/index.js 缺少 turnCardsOf：turnTail 不会去读 turn.data')
+  }
+  // 时序坑：apply() 可能比 ui-conversation provide 服务更早跑完，这时 ctx.get
+  // 拿到的是 undefined。只写 ctx.get 就会静默跳过注册，卡片永远不出现 ——
+  // 必须有 ctx.inject(['uiConversation'], …) 这条「等它出现再注册」的路。
+  if (!clientText.includes("ctx.inject(['uiConversation']")) {
+    fail("client/index.js 没有用 ctx.inject(['uiConversation'], …) 等 uiConversation 就绪：apply 早于服务注册时卡片整块失效")
+  }
+  if (clientText.includes('useChat(')) {
+    fail('client/index.js 还在用 useChat 读 chat snapshot：turn 是 TurnLocation 对象，读不到卡片')
+  }
+  // 大模型重排：命中 / 相关补充两档，相关补充折叠在命中后面
+  if (!clientText.includes('kbRelated')) {
+    fail('client/index.js 没有读 kbRelated：相关补充卡片无处显示')
+  }
+  if (!clientText.includes('kb-related-head')) {
+    fail('client/index.js 缺少相关补充的折叠区（kb-related-head）')
+  }
+  if (!clientText.includes('turnPayloadOf')) {
+    fail('client/index.js 仍只取一组卡片：命中和相关补充要分开读')
+  }
+  // AI 校验面板 / 工作台：按区块排版，不能退回"一行标签一行按钮"的 11.5px 小字
+  for (const shape of ['kb-vsec', 'kb-vbtn', 'kb-vsec-desc']) {
+    if (!clientText.includes(shape)) {
+      fail(`client/index.js 缺少校验面板的分区块样式 ${shape}：用户反馈「太小、分不清楚」`)
+    }
+  }
+  if (clientText.includes('kb-verify-row')) {
+    fail('client/index.js 又用回了 kb-verify-row：那是「一行标签一行按钮」的旧样式')
+  }
+  // 正文编辑框用纯文本：框里不显示 **粗体** / `代码` 这类标记，写回时再合回原标记。
+  // 少了 toPlainBody，编辑框又会变成一堆符号；少了 mergeMarkup，看一眼再保存就把标记洗掉了。
+  for (const fn of ['toPlainBody', 'mergeMarkup']) {
+    if (!clientText.includes(fn)) {
+      fail(`client/index.js 缺少 ${fn}：编辑框应显示纯文本，保存时保留未改动行的原标记`)
+    }
+  }
+  // 校验结果缓存：同一张卡、同一版正文、同一个模型重复点开不该再调模型，
+  // 但必须留一个「重新校验」的强制重跑入口，否则用户想看新结果时被缓存挡住。
+  for (const bit of ['reviewCacheGet', 'reviewCacheSet', 'reviewCacheClear']) {
+    if (!clientText.includes(bit)) {
+      fail(`client/index.js 缺少 ${bit}：重复点「AI 校验补充」会反复调用大模型`)
+    }
+  }
+  if (!clientText.includes("translate('workRunAgain')")) {
+    fail('client/index.js 没有「重新校验」入口：命中缓存后用户没法强制重跑')
+  }
+  // token 用量 + 「查看当前版本」（要显示改完之后那一版，不是库里旧的）
+  for (const bit of ['kb-token-note', 'addTokenUsage', 'workViewCurrent', 'kb-current']) {
+    if (!clientText.includes(bit)) {
+      fail(`client/index.js 缺少 ${bit}：token 用量 / 查看当前版本没有接线`)
+    }
+  }
+  // 旧版卡片的「AI 校验补充」「编辑」必须禁用（别让用户点下去撞版本冲突的墙）
+  for (const bit of ['useCardStale', 'actStaleHint', 'card/versions']) {
+    if (!clientText.includes(bit)) {
+      fail(`client/index.js 缺少 ${bit}：过期卡片的编辑类按钮没有禁用`)
     }
   }
 }

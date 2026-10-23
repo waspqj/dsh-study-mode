@@ -22,6 +22,9 @@ import path from 'node:path'
 
 import { createStore } from './store.js'
 import { rankDocs } from './rank.js'
+import { formatBody } from './format.js'
+import { projectCard, validateBody, buildReviewPrompt, parseReviewJson, buildAskPrompt } from './card.js'
+import { callModel, resolveSelection, mergeUsage } from './llm.js'
 
 export const name = 'learning-kb-ui'
 
@@ -146,6 +149,7 @@ function projectEntry(entry, slug, topicName) {
     tags: entry.tags || [],
     source: entry.source || null,
     verified: entry.verified ?? false,
+    verify: entry.verify || null,
     appliesTo: entry.appliesTo || null,
     version: entry.version || 1,
     createdAt: entry.createdAt || null,
@@ -323,19 +327,274 @@ function handleUpdate(body) {
   return { ok: true, ...result }
 }
 
+// ---------------------------------------------------------------- 卡片交互
+//
+// 这一组接口服务于「会话里那张卡片」：AI 校验补充、覆盖写回、追问、核实、回退。
+//
+// 上下文隔离：review / ask 拼给模型的提示词里只有这一张卡片（标题/正文/主题/标签），
+// 不带会话历史，也不带别的卡片。提示词拼装集中在 plugin/card.js，单测会断言这一点。
+
+/** 取一张卡片的定位信息（所在主题 + 条目）。 */
+function locateCard(body) {
+  const id = asId(body.id)
+  const topic = body.topic ? String(body.topic).trim() : null
+  const found = store().locateEntry({ id, topic })
+  const names = topicNames()
+  return { id, topic: found.topic, entry: found.entry, card: projectCard(found.entry, names.get(found.topic)) }
+}
+
+/** AI 校验补充（只读，不写库）。 */
+/**
+ * 报告校验会用的模型。
+ *
+ * 为什么单独开一个接口：模型是"跟着当前会话走"的（读宿主的 agentDefaultModel），
+ * 界面在打开面板时先问一次，就能立刻把「模型 xxx」标出来 —— 不用等校验跑完，
+ * 用户也就不用猜这次到底用的哪个 AI。
+ * @param {object} ctx 插件上下文
+ * @returns {{ok: boolean, provider: string, model: string, source: string}}
+ */
+function handleCardModel(ctx) {
+  const selection = resolveSelection(ctx)
+  return {
+    ok: true,
+    provider: selection.provider,
+    model: selection.model,
+    // 思考档位也要报出来：思考型模型把输出预算花在思考上，正文就空了
+    reasoningEffort: selection.reasoningEffort || null,
+    source: selection.source,
+  }
+}
+
+/** 模型没按 JSON 回答时的补救指令：让它只吐 JSON。 */
+const REVIEW_RETRY_RULE = [
+  '',
+  '重要：你上一条回答不是合法 JSON，程序无法解析。',
+  '这一次只输出一个 JSON 对象：第一个字符必须是 {，最后一个字符必须是 }。',
+  '不要说明文字、不要代码围栏、不要注释。',
+].join('\n')
+
+/**
+ * 思考型模型（MiniMax-M3 这类）可能把 maxTokens 全花在思考过程上，
+ * 结果一个字正文都没有。2026-10-23 实测：会话模型切到 MiniMax 后
+ * 「AI 校验补充」一直报「模型没有返回内容」。补救：加大上限 + 明确要求别思考。
+ */
+const NO_THINK_RULE = [
+  '',
+  '重要：不要输出思考过程，不要解释，直接给最终结果。',
+  '先在内部想清楚，然后只输出最终答案本身。',
+].join('\n')
+
+/**
+ * 校验的输出上限：思考型模型要留够空间，否则正文被思考挤没了。
+ *
+ * 2026-10-23 实测：会话模型是 MiniMax-M3.1-Flash（思考型）时，
+ * 会话自己的请求 maxTokens 是 512000，而校验原来只给 1400 ——
+ * 思考就把预算吃光了，回答里一个字正文都没有，界面只报「模型没有返回内容」。
+ */
+const REVIEW_MAX_TOKENS = 8000
+const REVIEW_RETRY_MAX_TOKENS = 12000
+const ASK_MAX_TOKENS = 6000
+const ASK_RETRY_MAX_TOKENS = 10000
+
+/**
+ * 一次问几张卡在库里现在是什么版本。
+ *
+ * 会话里的卡片是「打开那一刻」的快照：别的端（或这个端的另一个会话）改了这条，
+ * 库里版本号就往前走了，这份快照再拿去写就会撞上 expectedVersion 冲突。
+ * 界面靠这个接口提前知道「你手里这版已经过期」，直接把编辑类按钮禁用掉 ——
+ * 总比用户点下去撞一堵看不见的墙强。
+ *
+ * @param {URLSearchParams} params
+ * @returns {{ok: boolean, versions: Record<string, {version: number, updatedAt: string|null}|null>}}
+ */
+function handleCardVersions(params) {
+  const ids = String(params.get('ids') || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 50)
+  const topic = String(params.get('topic') || '').trim() || null
+  const versions = {}
+  for (const id of ids) {
+    let found = null
+    try {
+      found = store().locateEntry({ id, topic })
+    } catch {
+      // 主题对不上（用户改过主题名）时再全库找一次
+      if (topic) {
+        try {
+          found = store().locateEntry({ id, topic: null })
+        } catch {
+          found = null
+        }
+      }
+    }
+    versions[id] = found
+      ? { version: found.entry.version || 1, updatedAt: found.entry.updatedAt || null }
+      : null
+  }
+  return { ok: true, versions }
+}
+
+async function handleCardReview(ctx, body) {
+  const { card } = locateCard(body)
+  const mode = ['verify', 'expand', 'both'].includes(body.mode) ? body.mode : 'both'
+  const { system, prompt } = buildReviewPrompt(card, mode)
+  let result = await callModel(ctx, { system, prompt, maxTokens: REVIEW_MAX_TOKENS })
+  // 正文为空（多半是思考吃光了输出预算）→ 加大上限再试一次，并要求别思考
+  if (!result.ok && result.noText) {
+    const retry = await callModel(ctx, {
+      system: system + NO_THINK_RULE,
+      prompt,
+      maxTokens: REVIEW_RETRY_MAX_TOKENS,
+    })
+    if (retry.ok) {
+      result = retry
+    }
+  }
+  if (!result.ok) {
+    // 降级：模型不可用不是程序错误，界面提示「校验不可用」即可
+    return { ok: false, reason: result.reason, mode, card }
+  }
+
+  let parsed = parseReviewJson(result.text)
+  let attempts = 1
+  // 两次调用的 token 要累加：重试那一次也是真金白银花出去的
+  let usage = result.usage || null
+  // 解析失败就带"只输出 JSON"的补救指令重试一次。
+  // 2026-10-22 实测：DeepSeek 返回了非 JSON 的解释文字，旧代码把它当成
+  // 「AI 没发现问题」显示给用户 —— 校验功能最不能出的就是这种假阳性。
+  if (parsed.parseError) {
+    // 上限也给宽一点：第一次可能就是因为把 JSON 写太长被截断的
+    const retry = await callModel(ctx, { system: system + REVIEW_RETRY_RULE, prompt, maxTokens: REVIEW_RETRY_MAX_TOKENS })
+    if (retry.ok) {
+      attempts = 2
+      result = retry
+      usage = mergeUsage(usage, retry.usage)
+      parsed = parseReviewJson(retry.text)
+    }
+  }
+
+  return {
+    ok: true,
+    mode,
+    card,
+    issues: parsed.issues,
+    additions: parsed.additions,
+    suggested: parsed.suggested,
+    parseError: parsed.parseError,
+    // 解析失败时把模型原文带回去，界面能让用户看到"它到底回了什么"
+    rawPreview: parsed.parseError ? parsed.raw : '',
+    attempts,
+    provider: result.provider,
+    model: result.model,
+    usage,
+  }
+}
+
+/** 写回卡片正文（覆盖）。先排版规范化，再校验契约，然后才写库。 */
+function handleCardApply(body) {
+  const { id, topic } = locateCard(body)
+  const raw = String(body.body ?? '')
+  const formatted = formatBody(raw) ?? raw
+  const check = validateBody(formatted)
+  if (!check.ok) {
+    const error = new Error('正文不符合写入契约：' + check.problems.join('；'))
+    error.status = 400
+    error.code = 'CONTRACT_VIOLATION'
+    error.problems = check.problems
+    throw error
+  }
+  const expectedVersion = body.expectedVersion === undefined || body.expectedVersion === null
+    ? undefined
+    : Number(body.expectedVersion)
+  const result = store().applyCardBody({
+    id,
+    topic,
+    body: formatted,
+    expectedVersion,
+    model: body.model ? String(body.model) : null,
+  })
+  return { ok: true, ...result, warnings: check.warnings }
+}
+
+/** 问一下：只带这张卡片 + 这张卡片自己的追问历史。 */
+async function handleCardAsk(ctx, body) {
+  const { card } = locateCard(body)
+  const question = String(body.question ?? '').trim()
+  if (!question) throw new Error('问题不能为空')
+  const history = Array.isArray(body.history) ? body.history.slice(-6) : []
+  const { system, prompt } = buildAskPrompt(card, question, history)
+  let result = await callModel(ctx, { system, prompt, maxTokens: ASK_MAX_TOKENS })
+  // 正文为空（多半是思考吃光了输出预算）→ 加大上限再试一次
+  if (!result.ok && result.noText) {
+    const retry = await callModel(ctx, {
+      system: system + NO_THINK_RULE,
+      prompt,
+      maxTokens: ASK_RETRY_MAX_TOKENS,
+    })
+    if (retry.ok) result = retry
+  }
+  if (!result.ok) return { ok: false, reason: result.reason, card }
+  return {
+    ok: true,
+    answer: result.text.trim(),
+    card,
+    provider: result.provider,
+    model: result.model,
+    usage: result.usage || null,
+  }
+}
+
+/** 改核实状态：只写 verify / verified，不改正文、不升版本。 */
+function handleCardVerify(body) {
+  const { id, topic } = locateCard(body)
+  const state = body.state === 'unverified' ? 'unverified' : 'verified'
+  const by = ['user', 'ai-assisted', 'source'].includes(body.by) ? body.by : 'user'
+  const result = store().setVerify({ id, topic, state, by, note: body.note })
+  return { ok: true, ...result }
+}
+
+/** 批量核实：只走「用户确认」，不批量跑 AI。 */
+function handleCardVerifyBatch(body) {
+  const ids = Array.isArray(body.ids) ? body.ids : []
+  if (!ids.length) throw new Error('没有要核实的条目')
+  const by = ['user', 'ai-assisted', 'source'].includes(body.by) ? body.by : 'user'
+  const result = store().setVerifyMany({
+    ids,
+    topic: body.topic ? String(body.topic) : null,
+    state: body.state,
+    by,
+    note: body.note,
+  })
+  return { ok: true, ...result }
+}
+
+/** 回退到原版（只保留「原版 + 当前」两版）。 */
+function handleCardRollback(body) {
+  const { id, topic } = locateCard(body)
+  return { ok: true, ...store().rollbackCard({ id, topic }) }
+}
+
 const POST_ROUTES = {
   '/archive': handleArchive,
   '/restore': handleRestore,
   '/delete': handleDelete,
   '/add': handleAdd,
   '/update': handleUpdate,
+  '/card/review': (body, ctx) => handleCardReview(ctx, body),
+  '/card/apply': body => handleCardApply(body),
+  '/card/ask': (body, ctx) => handleCardAsk(ctx, body),
+  '/card/verify': body => handleCardVerify(body),
+  '/card/verify-batch': body => handleCardVerifyBatch(body),
+  '/card/rollback': body => handleCardRollback(body),
 }
 
 /**
  * 路由处理器。抽成工厂是为了能在测试里塞一个假的 getOrigin，
  * 不必真的起一个 webServer。
  */
-export function createHandler({ getOrigin = () => '' } = {}) {
+export function createHandler({ getOrigin = () => '', ctx = null } = {}) {
   const guard = createOriginGuard(getOrigin)
   return async function handler(req, res) {
     let url
@@ -354,6 +613,11 @@ export function createHandler({ getOrigin = () => '' } = {}) {
         if (route === '/overview') return sendJson(res, 200, handleOverview())
         if (route === '/entries') return sendJson(res, 200, handleEntries(url.searchParams))
         if (route === '/search') return sendJson(res, 200, handleSearch(url.searchParams))
+        // 当前会用它做校验的是哪个模型：界面在打开校验面板时先问一次，
+        // 这样用户不用等校验跑完就知道"对齐没对齐"。
+        if (route === '/card/model') return sendJson(res, 200, handleCardModel(ctx))
+        // 会话里的卡片可能是旧快照：问一句库里现在是什么版本，界面据此禁用过期卡片的编辑
+        if (route === '/card/versions') return sendJson(res, 200, handleCardVersions(url.searchParams))
         return sendJson(res, 404, { error: `未知接口 ${route}` })
       }
       if (method === 'POST') {
@@ -362,11 +626,15 @@ export function createHandler({ getOrigin = () => '' } = {}) {
         const action = POST_ROUTES[route]
         if (!action) return sendJson(res, 404, { error: `未知接口 ${route}` })
         const body = await readBody(req)
-        return sendJson(res, 200, action(body))
+        return sendJson(res, 200, await action(body, ctx))
       }
       return sendJson(res, 405, { error: `不支持的请求方法 ${method}` })
     } catch (error) {
-      return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      const status = error && typeof error.status === 'number' ? error.status : 400
+      const payload = { error: error instanceof Error ? error.message : String(error) }
+      if (error && Array.isArray(error.problems)) payload.problems = error.problems
+      if (error && error.code) payload.code = error.code
+      return sendJson(res, status, payload)
     }
   }
 }
@@ -380,6 +648,7 @@ export function apply(ctx) {
         return ''
       }
     },
+    ctx,
   })
   ctx.effect(
     () => ctx.webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler }),

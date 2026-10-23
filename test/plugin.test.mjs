@@ -143,32 +143,32 @@ await check('入库条目带出处类型/核实标记/适用范围', async () =>
   assert.equal(entry.appliesTo, 'MySQL 8.0')
 })
 await check('检索命中并带出处', async () => {
-  const result = search.execute({ query: '间隙锁' }, exec)
+  const result = await search.execute({ query: '间隙锁' }, exec)
   assert.equal(result.scope, 'mysql-进阶')
   assert.equal(result.hits[0].title, '间隙锁')
   assert.equal(result.hits[0].source.type, 'file')
   assert.equal(result.hits[0].appliesTo, 'MySQL 8.0')
 })
 await check('整体库检索也能命中', async () => {
-  const result = search.execute({ query: '间隙锁', scope: 'all' }, exec)
+  const result = await search.execute({ query: '间隙锁', scope: 'all' }, exec)
   assert.equal(result.scope, 'all')
   assert.equal(result.hits.length, 1)
 })
 await check('未绑定主题时仍按整体库检索（整体库这一级不跳过），并提示去绑定主题', async () => {
-  const result = search.execute({ query: '间隙锁' }, { agent: { id: 'sess-3' } })
+  const result = await search.execute({ query: '间隙锁' }, { agent: { id: 'sess-3' } })
   assert.equal(result.currentTopic, null)
   assert.equal(result.hits.length, 1, '整体库应该能查到')
   assert.match(result.note, /没绑定主题/)
 })
 
 await check('scope=auto 标出当前主题的命中', async () => {
-  const result = search.execute({ query: '间隙锁' }, exec)
+  const result = await search.execute({ query: '间隙锁' }, exec)
   assert.equal(result.hits[0].fromCurrent, true)
   assert.equal(result.hits[0].topic, 'mysql-进阶')
 })
 
 await check('scope=topic 只查当前主题', async () => {
-  const result = search.execute({ query: '间隙锁', scope: 'topic' }, exec)
+  const result = await search.execute({ query: '间隙锁', scope: 'topic' }, exec)
   assert.equal(result.scope, 'mysql-进阶')
   assert.equal(result.hits.length, 1)
 })
@@ -179,23 +179,25 @@ await check('scope=auto 当前主题命中不够时用其它主题补齐', async
   const otherCard = { title: '另一种锁', body: '另一种锁的机制说明。' }
   await save.execute({ cards: [otherCard] }, otherExec)
   await save.execute({ approved: true, cards: [otherCard] }, otherExec)
-  const result = search.execute({ query: '另一种锁' }, exec)
+  const result = await search.execute({ query: '另一种锁' }, exec)
   assert.equal(result.hits.length, 1)
   assert.equal(result.hits[0].fromCurrent, false)
   assert.equal(result.hits[0].topic, '其它主题')
 })
 
 console.log('修改与归档')
-await check('更新条目并升版本', async () => {
+await check('更新条目并升版本（版本号 = 时间戳）', async () => {
+  const before = entries.execute({}, exec).entries[0].version
   const result = update.execute({ id: entryId, verified: true }, exec)
-  assert.equal(result.version, 2)
+  assert.ok(result.version >= 1e12, '版本号应该是时间戳：' + result.version)
+  assert.ok(result.version > Number(before), '新版本号要比旧的大')
   const entry = entries.execute({}, exec).entries[0]
   assert.equal(entry.verified, true)
 })
 await check('归档后检索不再返回', async () => {
   const result = remove.execute({ id: entryId }, exec)
   assert.equal(result.mode, 'archived')
-  assert.equal(search.execute({ query: '间隙锁' }, exec).hits.length, 0)
+  assert.equal((await search.execute({ query: '间隙锁' }, exec)).hits.length, 0)
   assert.equal(entries.execute({ status: 'archived' }, exec).total, 1)
 })
 await check('归档条目可恢复（再次写入即恢复原条目）', async () => {
@@ -205,7 +207,7 @@ await check('归档条目可恢复（再次写入即恢复原条目）', async (
   assert.equal(result.plan[0].action, 'restore')
   assert.equal(entries.execute({ status: 'active' }, exec).total, 1)
   assert.equal(entries.execute({ status: 'archived' }, exec).total, 0)
-  assert.equal(search.execute({ query: '间隙锁' }, exec).hits.length, 1)
+  assert.equal((await search.execute({ query: '间隙锁' }, exec)).hits.length, 1)
 })
 
 console.log('渲染')
@@ -216,7 +218,7 @@ await check('预览渲染标注「未写入」', async () => {
   assert.match(rendered[0].text, /预览，未写入/)
 })
 await check('检索渲染含命中与出处', async () => {
-  const result = search.execute({ query: '间隙锁', scope: 'all' }, exec)
+  const result = await search.execute({ query: '间隙锁', scope: 'all' }, exec)
   const rendered = search.output.render({}, result)
   assert.match(rendered[0].text, /间隙锁/)
   assert.match(rendered[0].text, /来源 文件/)

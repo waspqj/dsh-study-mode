@@ -1,14 +1,54 @@
 // 学习模式知识库 · 检索层
 //
+// 这是**纯文字匹配**，没有语义（无 embedding、无向量库）。
 // 打分：字段加权的 BM25（title 3 / tags 2 / q 2 / body 1）+ 整句命中加分。
 // 分词：英文按词，中文按 bigram（不用词典，够用且零依赖）。
 // 说明：小语料下纯 BM25 的 IDF 会偏低（一条文档时 idf≈0.29），
 //      所以额外给「整句出现在标题/正文」的条目加分，保证精确命中排在前面。
+//
+// 两道精度控制（2026-10-22 用户反馈「一堆没有关联的卡片」后加的）：
+//   1. QUERY_STOP 把疑问词/虚词从打分里剔除，否则「什么是X」全都互相命中；
+//   2. MIN_RELATIVE 相对分门槛，避免只沾一个通用词就进榜。
 
 const K1 = 1.2
 const B = 0.75
 
 const FIELD_WEIGHTS = { title: 3, tags: 2, q: 2, body: 1 }
+
+// 查询侧停用词：疑问句式和虚词。
+//
+// 为什么必须有这张表：中文按 bigram 切，「什么是LRU」会切出「什么」「么是」
+// 「什么是」三个词。这些词在整个语料里到处都是，BM25 的 IDF 压低它们的权重，
+// 但压不到零 —— 于是「什么是并查集」「什么是事务」都能靠共享「什么是」进榜，
+// 卡片立刻变噪声。（实测：query=`什么是LRU cache`，第 2~9 名全是「什么是X」。）
+// 停用词同时参与覆盖率的分母计算，否则覆盖率会被虚高（protobuf 那条显示 0.6）。
+const QUERY_STOP = new Set([
+  // 疑问 / 语气
+  '什么', '么是', '是什', '什么是', '什么样', '么样', '怎样', '怎么', '么办',
+  '如何', '为何', '为什', '为什么', '哪些', '哪个', '哪里', '是否', '能否', '可否',
+  // 泛用谓词 / 客套
+  '可以', '能不', '不能', '请问', '一下', '介绍', '解释', '说说', '讲讲', '聊聊',
+  '帮我', '我想', '想知', '知道', '告诉',
+  // 指代 / 连接
+  '这个', '那个', '一个', '就是', '这样', '那样', '这些', '那些', '以及', '还有',
+  // 英文
+  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'to', 'of', 'in', 'on',
+  'for', 'and', 'or', 'what', 'how', 'why', 'which', 'do', 'does', 'it', 'this',
+  'that', 'with', 'can', 'you', 'me', 'please',
+])
+
+// 门槛：分数不到最佳分这个比例的一律不进榜。
+// 没有门槛时只要共享任意一个词就返回，这是「一堆无关卡片」的直接原因。
+// 为什么只用相对分不用覆盖率：短查询（2 个内容词）时只匹配 1 个的覆盖率也是
+// 0.5，一样过线 —— 实测「缓冲池的三个链表」只有 LRU 一个词就混进来了。
+//
+// 两个值分工：
+//   CANDIDATE_RELATIVE —— 交给大模型重排时的**召回**门槛，故意放得松，
+//     让"差不多相关"的条目也能进候选池，精确判断交给模型；
+//   MIN_RELATIVE —— 没有模型可用（降级）时的**精度**门槛，收紧，别退回噪声。
+export const CANDIDATE_RELATIVE = 0.12
+export const MIN_RELATIVE = 0.3
+
 
 /** 英文/数字按词切，中文按 bigram 切。 */
 export function tokenize(text) {
@@ -123,8 +163,10 @@ function strength(score, coverage, best) {
  * @param {object[]} docs 候选条目
  * @param {string} query 查询串
  * @param {number} limit 返回条数
+ * @param {{minRelative?: number}} [options] minRelative：相对分门槛，默认 MIN_RELATIVE
  */
-export function rankDocs(docs, query, limit = 3) {
+export function rankDocs(docs, query, limit = 3, options = {}) {
+  const minRelative = typeof options.minRelative === 'number' ? options.minRelative : MIN_RELATIVE
   const queryText = String(query ?? '').trim()
   const queryTokens = tokenize(queryText)
   if (!docs.length || !queryTokens.length) return []
@@ -144,7 +186,10 @@ export function rankDocs(docs, query, limit = 3) {
   }
 
   const N = docs.length
-  const queryTerms = Array.from(new Set(queryTokens))
+  const allTerms = Array.from(new Set(queryTokens))
+  // 只让"内容词"参与打分。全是停用词时退回原样，免得整条查询被清空。
+  const contentTerms = allTerms.filter(term => !QUERY_STOP.has(term))
+  const queryTerms = contentTerms.length ? contentTerms : allTerms
 
   const scored = docs.map((doc, index) => {
     let score = 0
@@ -180,9 +225,12 @@ export function rankDocs(docs, query, limit = 3) {
     return { doc, score, matched: Array.from(matched) }
   })
 
-  return scored
-    .filter(item => item.score > 0)
-    .sort((a, b) => b.score - a.score)
+  const sorted = scored.filter(item => item.score > 0).sort((a, b) => b.score - a.score)
+  const bestScore = sorted[0]?.score ?? 0
+  // 门槛只看相对分：绝对分在小语料里没有可比性，最佳分的比例才有。
+  const kept = sorted.filter(item => item.score >= bestScore * minRelative)
+
+  return kept
     .slice(0, Math.max(1, limit))
     .map(item => ({
       id: item.doc.id,
@@ -199,7 +247,7 @@ export function rankDocs(docs, query, limit = 3) {
       updatedAt: item.doc.updatedAt || null,
       score: round2(item.score),
       coverage: Math.round((item.matched.length / Math.max(1, queryTerms.length)) * 100) / 100,
-      strength: strength(item.score, item.matched.length / Math.max(1, queryTerms.length), scored[0]?.score ?? item.score),
+      strength: strength(item.score, item.matched.length / Math.max(1, queryTerms.length), bestScore),
       matched: item.matched.slice(0, 6),
     }))
 }
