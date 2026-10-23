@@ -24,7 +24,7 @@ import { createStore } from './store.js'
 import { rankDocs } from './rank.js'
 import { formatBody } from './format.js'
 import { projectCard, validateBody, buildReviewPrompt, parseReviewJson, buildAskPrompt } from './card.js'
-import { callModel, resolveSelection, mergeUsage } from './llm.js'
+import { callModel, resolveSelection, mergeUsage, setModelPreference } from './llm.js'
 
 export const name = 'learning-kb-ui'
 
@@ -135,8 +135,23 @@ function tagList(value) {
     .slice(0, 8)
 }
 
-/** 条目投影：界面要正文，所以正文也发（单条 ≤ 几百字，123 条约 100KB，可接受） */
-function projectEntry(entry, slug, topicName) {
+/**
+ * 列表里每条正文只发这么多字。
+ *
+ * 2026-10-23 审计 P1-8：/entries 原来把整篇正文都发出去 —— 40 行就是 35.7KB，
+ * 两个主题全列出来接近 230KB，面板一开就要搬这么一坨过去，而列表里其实
+ * 只看得到前几行。现在列表只发 160 字摘要，正文全文用 GET /entry 单独取。
+ */
+const ENTRY_EXCERPT = 160
+
+/**
+ * 条目投影：界面要正文，所以正文也发（单条 ≤ 几百字，123 条约 100KB，可接受）
+ *
+ * options.full = true 时发全文（详情用）；否则发 160 字摘要。
+ */
+function projectEntry(entry, slug, topicName, options = {}) {
+  const raw = String(entry.body || '')
+  const truncated = options.full !== true && raw.length > ENTRY_EXCERPT
   return {
     id: entry.id,
     topic: slug,
@@ -145,7 +160,10 @@ function projectEntry(entry, slug, topicName) {
     status: entry.status || 'active',
     title: entry.title,
     q: entry.q || null,
-    body: entry.body || '',
+    body: truncated ? raw.slice(0, ENTRY_EXCERPT) + '…' : raw,
+    // 列表据此知道「这条被截断了，详情得另外取」
+    bodyTruncated: truncated,
+    bodyLength: raw.length,
     tags: entry.tags || [],
     source: entry.source || null,
     verified: entry.verified ?? false,
@@ -227,6 +245,25 @@ function handleEntries(params) {
   }
 }
 
+/**
+ * 单条详情：把某一条的正文全文取回来（列表只给摘要，正文在这里）。
+ * @param {URLSearchParams} params
+ * @returns {{ok: boolean, entry: object|null}}
+ */
+function handleEntry(params) {
+  const id = String(params.get('id') || '').trim()
+  if (!id) return { ok: false, error: 'id 不能为空' }
+  const topicParam = String(params.get('topic') || '').trim()
+  const { slugs, names } = resolveSlugs(topicParam)
+  for (const slug of slugs) {
+    for (const entry of store().readEntries(slug)) {
+      if (entry.id !== id) continue
+      return { ok: true, entry: projectEntry(entry, slug, names.get(slug), { full: true }) }
+    }
+  }
+  return { ok: true, entry: null }
+}
+
 function handleSearch(params) {
   const query = String(params.get('q') || '').trim()
   if (!query) return { q: '', scope: 'all', poolSize: 0, hits: [] }
@@ -241,12 +278,19 @@ function handleSearch(params) {
   }
   const limit = Number(params.get('limit'))
   const wanted = Number.isFinite(limit) && limit > 0 ? Math.min(60, limit) : 30
-  const hits = rankDocs(pool, query, wanted).map(hit => ({
-    ...hit,
-    topicName: names.get(hit.topic) || hit.topic,
-    // 正文完整版另取：rankDocs 只给 400 字摘要
-    body: (pool.find(entry => entry.id === hit.id)?.body) ?? hit.body,
-  }))
+  // 检索结果同样只发摘要，正文全文用 GET /entry 单独取（审计 P1-8）
+  const byId = new Map(pool.map(entry => [entry.id, entry]))
+  const hits = rankDocs(pool, query, wanted).map(hit => {
+    const raw = String(byId.get(hit.id)?.body ?? hit.body ?? '')
+    const truncated = raw.length > ENTRY_EXCERPT
+    return {
+      ...hit,
+      topicName: names.get(hit.topic) || hit.topic,
+      body: truncated ? raw.slice(0, ENTRY_EXCERPT) + '…' : raw,
+      bodyTruncated: truncated,
+      bodyLength: raw.length,
+    }
+  })
   return {
     q: query,
     scope: topicParam || 'all',
@@ -365,8 +409,99 @@ function handleCardModel(ctx) {
   }
 }
 
-/** 模型没按 JSON 回答时的补救指令：让它只吐 JSON。 */
-const REVIEW_RETRY_RULE = [
+/**
+ * 枚举宿主上可选的模型（给界面的模型选择器用）。
+ *
+ * `llm.listProviders()` / `listModels()` / `resolveModelInfo()` 都是宿主公开的 API，
+ * `resolveModelInfo` 还会带回 `reasoning.efforts` —— 有了它界面才知道某个模型
+ * 能不能调思考档位、档位有哪些，不用猜。
+ *
+ * 任何一步失败都只让对应那段为空，不影响整个接口（拿不到目录就别显示选择器，
+ * 不能因为枚举失败把校验功能一起拖挂）。
+ *
+ * @param {object} ctx 插件上下文
+ * @returns {Promise<object[]>} 扁平的模型目录
+ */
+async function listModelCatalog(ctx) {
+  const llm = ctx && typeof ctx.get === 'function' ? ctx.get('llm') : null
+  if (!llm || typeof llm.listProviders !== 'function') return []
+  let providers = []
+  try {
+    providers = await llm.listProviders()
+  } catch {
+    return []
+  }
+  const out = []
+  for (const provider of providers || []) {
+    const providerId = String(provider && provider.id ? provider.id : '').trim()
+    if (!providerId) continue
+    let models = []
+    try {
+      models = await llm.listModels(providerId)
+    } catch {
+      models = []
+    }
+    for (const model of models || []) {
+      const modelId = String(model && model.id ? model.id : '').trim()
+      if (!modelId) continue
+      let info = null
+      try {
+        info = await llm.resolveModelInfo(providerId, modelId)
+      } catch {
+        info = null
+      }
+      const reasoning = info && info.reasoning ? info.reasoning : null
+      out.push({
+        provider: providerId,
+        providerName: (provider && provider.name) || providerId,
+        id: modelId,
+        name: (model && model.name) || modelId,
+        contextWindow: info && info.context ? info.context.contextWindow || null : null,
+        // 空数组 = 这个模型不支持思考档位，界面就别给档位选择器
+        efforts: reasoning && Array.isArray(reasoning.efforts) ? reasoning.efforts.map(e => ({ id: e.id, name: e.name })) : [],
+        defaultEffort: (reasoning && reasoning.defaultEffort) || null,
+      })
+    }
+  }
+  return out
+}
+
+/** 读当前设置 + 会话模型 + 实际生效的模型 + 可选模型目录。 */
+async function handleAiModelGet(ctx) {
+  const session = (() => {
+    try {
+      const service = ctx && typeof ctx.get === 'function' ? ctx.get('agentDefaultModel') : null
+      const current = service && typeof service.currentSelection === 'function' ? service.currentSelection() : null
+      if (!current) return null
+      return {
+        provider: current.provider ? String(current.provider) : null,
+        model: current.model ? String(current.model) : null,
+        reasoningEffort: current.reasoningEffort ? String(current.reasoningEffort) : null,
+      }
+    } catch {
+      return null
+    }
+  })()
+  const active = resolveSelection(ctx)
+  return {
+    ok: true,
+    aiModel: store().getAiModel(),
+    session,
+    active,
+    catalog: await listModelCatalog(ctx),
+  }
+}
+
+/**
+ * 保存「插件 AI 调用用哪个模型」。
+ * 传 `{aiModel:{mode:'session'}}` 恢复跟随会话；传 fixed 必须带 provider + model。
+ */
+function handleAiModelSet(body) {
+  const next = body && typeof body === 'object' && body.aiModel ? body.aiModel : body
+  return { ok: true, aiModel: store().setAiModel(next) }
+}
+
+/** 模型没按 JSON 回答时的补救指令：让它只吐 JSON。 */const REVIEW_RETRY_RULE = [
   '',
   '重要：你上一条回答不是合法 JSON，程序无法解析。',
   '这一次只输出一个 JSON 对象：第一个字符必须是 {，最后一个字符必须是 }。',
@@ -392,9 +527,13 @@ const NO_THINK_RULE = [
  * 思考就把预算吃光了，回答里一个字正文都没有，界面只报「模型没有返回内容」。
  */
 const REVIEW_MAX_TOKENS = 8000
-const REVIEW_RETRY_MAX_TOKENS = 12000
+const REVIEW_RETRY_MAX_TOKENS = 16000
+/** 校验一次允许跑多久：思考型模型实测要 100 秒量级，90 秒会把好的一次砍掉。 */
+const REVIEW_TIMEOUT_MS = 180_000
 const ASK_MAX_TOKENS = 6000
 const ASK_RETRY_MAX_TOKENS = 10000
+/** 追问一次允许跑多久（思考型模型实测要 100 秒量级，90 秒会把好的一次砍掉）。 */
+const ASK_TIMEOUT_MS = 180_000
 
 /**
  * 一次问几张卡在库里现在是什么版本。
@@ -437,16 +576,32 @@ function handleCardVersions(params) {
 }
 
 async function handleCardReview(ctx, body) {
+  const startedAt = performance.now()
   const { card } = locateCard(body)
   const mode = ['verify', 'expand', 'both'].includes(body.mode) ? body.mode : 'both'
   const { system, prompt } = buildReviewPrompt(card, mode)
-  let result = await callModel(ctx, { system, prompt, maxTokens: REVIEW_MAX_TOKENS })
+  // 校验的提示词里已经写了「不要输出思考过程」（见 buildReviewPrompt 规则 9）。
+  //
+  // 2026-10-23 实测：会话模型是 MiniMax-M3.1-Flash（思考型）时，原来这里
+  // 没有那句话，它把 REVIEW_MAX_TOKENS=8000 几乎全花在思考上 ——
+  // 典型一次跑 100 秒、输出 4800~5900 token（正文 JSON 只占几百字）；
+  // 有时思考直接撞满 8000，一个字正文都没吐，于是触发 noText 重试，
+  // **总耗时翻倍、token 也翻倍**，用户看到的就是「卡很久、第一次失败」。
+  let result = await callModel(ctx, {
+    system,
+    prompt,
+    maxTokens: REVIEW_MAX_TOKENS,
+    // 默认 90 秒对思考型模型太紧：实测一次校验要 100 秒左右，
+    // 卡在 90 秒被砍掉就变成「模型调用被中止」。给宽一点，让它跑完。
+    timeoutMs: REVIEW_TIMEOUT_MS,
+  })
   // 正文为空（多半是思考吃光了输出预算）→ 加大上限再试一次，并要求别思考
   if (!result.ok && result.noText) {
     const retry = await callModel(ctx, {
       system: system + NO_THINK_RULE,
       prompt,
       maxTokens: REVIEW_RETRY_MAX_TOKENS,
+      timeoutMs: REVIEW_TIMEOUT_MS,
     })
     if (retry.ok) {
       result = retry
@@ -454,7 +609,7 @@ async function handleCardReview(ctx, body) {
   }
   if (!result.ok) {
     // 降级：模型不可用不是程序错误，界面提示「校验不可用」即可
-    return { ok: false, reason: result.reason, mode, card }
+    return { ok: false, reason: result.reason, mode, card, elapsedMs: Math.round(performance.now() - startedAt) }
   }
 
   let parsed = parseReviewJson(result.text)
@@ -466,7 +621,12 @@ async function handleCardReview(ctx, body) {
   // 「AI 没发现问题」显示给用户 —— 校验功能最不能出的就是这种假阳性。
   if (parsed.parseError) {
     // 上限也给宽一点：第一次可能就是因为把 JSON 写太长被截断的
-    const retry = await callModel(ctx, { system: system + REVIEW_RETRY_RULE, prompt, maxTokens: REVIEW_RETRY_MAX_TOKENS })
+    const retry = await callModel(ctx, {
+      system: system + REVIEW_RETRY_RULE,
+      prompt,
+      maxTokens: REVIEW_RETRY_MAX_TOKENS,
+      timeoutMs: REVIEW_TIMEOUT_MS,
+    })
     if (retry.ok) {
       attempts = 2
       result = retry
@@ -489,6 +649,10 @@ async function handleCardReview(ctx, body) {
     provider: result.provider,
     model: result.model,
     usage,
+    // 思考了多少字、总共跑了多久：思考型模型这两个数才是「为什么慢」的答案，
+    // 之前 normalizeUsage 把 reasoning token 丢了，界面上什么都看不出来。
+    reasoningChars: result.reasoningChars || 0,
+    elapsedMs: Math.round(performance.now() - startedAt),
   }
 }
 
@@ -525,13 +689,23 @@ async function handleCardAsk(ctx, body) {
   if (!question) throw new Error('问题不能为空')
   const history = Array.isArray(body.history) ? body.history.slice(-6) : []
   const { system, prompt } = buildAskPrompt(card, question, history)
-  let result = await callModel(ctx, { system, prompt, maxTokens: ASK_MAX_TOKENS })
+  // 和校验同一个毛病：思考型模型第一次调用就把预算花在思考上，
+  // 正文一个字没吐 → 触发重试 → 等待和花费都翻倍。
+  // 提示词里已经写了「不要输出思考过程」（见 buildAskPrompt 规则 4），
+  // 调用侧再直接要求宿主把思考档位关掉。
+  let result = await callModel(ctx, {
+    system,
+    prompt,
+    maxTokens: ASK_MAX_TOKENS,
+    timeoutMs: ASK_TIMEOUT_MS,
+  })
   // 正文为空（多半是思考吃光了输出预算）→ 加大上限再试一次
   if (!result.ok && result.noText) {
     const retry = await callModel(ctx, {
       system: system + NO_THINK_RULE,
       prompt,
       maxTokens: ASK_RETRY_MAX_TOKENS,
+      timeoutMs: ASK_TIMEOUT_MS,
     })
     if (retry.ok) result = retry
   }
@@ -543,6 +717,7 @@ async function handleCardAsk(ctx, body) {
     provider: result.provider,
     model: result.model,
     usage: result.usage || null,
+    reasoningChars: result.reasoningChars || 0,
   }
 }
 
@@ -588,6 +763,7 @@ const POST_ROUTES = {
   '/card/verify': body => handleCardVerify(body),
   '/card/verify-batch': body => handleCardVerifyBatch(body),
   '/card/rollback': body => handleCardRollback(body),
+  '/ai-model': body => handleAiModelSet(body),
 }
 
 /**
@@ -595,6 +771,10 @@ const POST_ROUTES = {
  * 不必真的起一个 webServer。
  */
 export function createHandler({ getOrigin = () => '', ctx = null } = {}) {
+  // 把「插件自己的模型设置」交给 llm.js：每次调用都重新读，改完立刻生效，不用重启。
+  // 默认「跟随会话」；设成 fixed 就只影响校验/追问/重排这三条一次性调用。
+  // 放在这里而不是 apply()，是为了任何拿到 handler 的入口行为都一致（测试也走这条）。
+  setModelPreference(() => store().getAiModel())
   const guard = createOriginGuard(getOrigin)
   return async function handler(req, res) {
     let url
@@ -612,12 +792,16 @@ export function createHandler({ getOrigin = () => '', ctx = null } = {}) {
       if (method === 'GET' || method === 'HEAD') {
         if (route === '/overview') return sendJson(res, 200, handleOverview())
         if (route === '/entries') return sendJson(res, 200, handleEntries(url.searchParams))
+        // 单条详情：列表只给 160 字摘要，正文全文在这里单独取（审计 P1-8）
+        if (route === '/entry') return sendJson(res, 200, handleEntry(url.searchParams))
         if (route === '/search') return sendJson(res, 200, handleSearch(url.searchParams))
         // 当前会用它做校验的是哪个模型：界面在打开校验面板时先问一次，
         // 这样用户不用等校验跑完就知道"对齐没对齐"。
         if (route === '/card/model') return sendJson(res, 200, handleCardModel(ctx))
         // 会话里的卡片可能是旧快照：问一句库里现在是什么版本，界面据此禁用过期卡片的编辑
         if (route === '/card/versions') return sendJson(res, 200, handleCardVersions(url.searchParams))
+        // 插件 AI 调用（校验/追问/重排）用哪个模型：读设置 + 可选模型目录
+        if (route === '/ai-model') return sendJson(res, 200, await handleAiModelGet(ctx))
         return sendJson(res, 404, { error: `未知接口 ${route}` })
       }
       if (method === 'POST') {

@@ -100,6 +100,18 @@ await check('追问提示词只含卡片 + 自己的追问历史', async () => {
   assert.match(prompt, /上一个问题/)
   assert.match(prompt, /为什么？/)
 })
+// 2026-10-23 实测：思考型模型（MiniMax-M3.1-Flash）会把输出预算几乎全花在
+// 思考上 —— 一次校验跑 100 秒、输出 4800~5900 token，正文只占几百字；
+// 有时思考直接撞满 8000 撞出一个空回复，触发重试后耗时和花费都翻倍。
+// 提示词里必须写明「不要输出思考过程」，否则用户看到的就是「卡很久、第一次失败」。
+await check('校验提示词要求「不要输出思考过程」', async () => {
+  const { system } = buildReviewPrompt(card, 'both')
+  assert.match(system, /不要输出思考过程/)
+})
+await check('追问提示词要求「不要输出思考过程」', async () => {
+  const { system } = buildAskPrompt(card, '为什么？', [])
+  assert.match(system, /不要输出思考过程/)
+})
 
 // 2026-10-22 用户点「AI 校验补充」，模型回了整张 TCP/UDP 完整对照表 + 追问清单。
 // 工作台只该补"卡里确实缺的事实点"，所以提示词里就要禁止这种输出，解析时再兜一层。
@@ -290,6 +302,48 @@ async function call(options) {
 }
 const jsonHeaders = { 'content-type': 'application/json', origin: SELF_ORIGIN }
 const post = (route, body) => call({ method: 'POST', url: ROUTE_PREFIX + route, headers: jsonHeaders, body })
+const get = (route) => call({ method: 'GET', url: ROUTE_PREFIX + route, headers: { origin: SELF_ORIGIN } })
+
+console.log('列表只发摘要，正文全文另取（审计 P1-8）')
+await check('/entries 里长正文只发 160 字摘要，并标出原文长度', async () => {
+  const longBody = '首行结论：间隙锁锁住索引记录之间的间隙，阻止其它事务插入新行。\n' + '要点'.repeat(120)
+  const plan = store.planSave({
+    topic: '摘要测试',
+    sessionId: 's-excerpt',
+    dryRun: false,
+    cards: [{ title: '摘要测试条目', body: longBody }],
+  })
+  const id = plan.plan[0].id
+  const res = await get('/entries?topic=' + encodeURIComponent('摘要测试'))
+  assert.equal(res.statusCode, 200)
+  const row = res.json.entries.find(item => item.id === id)
+  assert.ok(row, '列表里应该有这条')
+  assert.equal(row.bodyTruncated, true, '长正文要标为已截断')
+  assert.ok(row.body.length <= 161, '摘要最多 160 字（+省略号）：' + row.body.length)
+  assert.equal(row.bodyLength, longBody.length, '要报出原文有多长')
+})
+await check('/entry?id=... 取回正文全文', async () => {
+  const longBody = '首行结论：间隙锁锁住索引记录之间的间隙，阻止其它事务插入新行。\n' + '要点'.repeat(120)
+  const plan = store.planSave({
+    topic: '摘要测试2',
+    sessionId: 's-excerpt',
+    dryRun: false,
+    cards: [{ title: '详情测试条目', body: longBody }],
+  })
+  const id = plan.plan[0].id
+  const res = await get('/entry?id=' + encodeURIComponent(id))
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.equal(res.json.entry.id, id)
+  assert.equal(res.json.entry.body, longBody, '详情要给全文')
+  assert.equal(res.json.entry.bodyTruncated, false)
+})
+await check('/entry 查不到就返回 null，不报错', async () => {
+  const res = await get('/entry?id=k_not_exist_at_all')
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.equal(res.json.entry, null)
+})
 
 await check('review 返回问题/补充/建议正文', async () => {
   const res = await post('/card/review', { id: entryId, mode: 'both' })
@@ -442,6 +496,75 @@ await check('两次都不是 JSON 时明确报 parseError 并带回原文', asyn
   assert.equal(res.json.parseError, true, '解析失败必须如实报出来')
   assert.match(res.json.rawPreview, /还是不对/, '要把模型原文带回去')
   assert.equal(res.json.attempts, 2)
+})
+
+console.log('插件 AI 模型切换（2026-10-23「模型要能切换」）')
+await check('GET /ai-model 默认跟随会话；枚举不到模型时目录为空也不报错', async () => {
+  const res = await get('/ai-model')
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.equal(res.json.aiModel.mode, 'session')
+  // 测试用的假 llm 没有 listProviders，枚举能力缺失时退回空目录而不是抛错
+  assert.deepEqual(res.json.catalog, [])
+})
+
+await check('GET /ai-model 枚举宿主的模型目录（含思考档位与上下文）', async () => {
+  const catalogLlm = {
+    async listProviders() {
+      return [{ id: 'deepseek-official', name: 'DeepSeek 官方' }]
+    },
+    async listModels(provider) {
+      return provider === 'deepseek-official' ? [{ id: 'deepseek-flash', name: 'deepseek-flash' }] : []
+    },
+    async resolveModelInfo(provider, model) {
+      return {
+        provider,
+        id: model,
+        name: model,
+        context: { contextWindow: 128000 },
+        reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }], defaultEffort: 'high' },
+      }
+    },
+  }
+  const handler = createHandler({
+    getOrigin: () => SELF_ORIGIN,
+    ctx: { get: name => (name === 'llm' ? catalogLlm : undefined) },
+  })
+  const res = makeRes()
+  await handler(makeReq({ method: 'GET', url: ROUTE_PREFIX + '/ai-model', headers: { origin: SELF_ORIGIN } }), res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.catalog.length, 1, '应该枚举出一个模型')
+  const entry = res.json.catalog[0]
+  assert.equal(entry.provider, 'deepseek-official')
+  assert.equal(entry.id, 'deepseek-flash')
+  assert.deepEqual(entry.efforts.map(item => item.id), ['low', 'high'], '档位要一并带出来')
+  assert.equal(entry.defaultEffort, 'high')
+  assert.equal(entry.contextWindow, 128000)
+})
+
+await check('POST /ai-model 固定模型 → /card/model 报 plugin 来源；改回 session 恢复', async () => {
+  const saved = await post('/ai-model', {
+    aiModel: { mode: 'fixed', provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'low' },
+  })
+  assert.equal(saved.statusCode, 200)
+  assert.equal(saved.json.aiModel.mode, 'fixed')
+
+  const fixedModel = await get('/card/model')
+  assert.equal(fixedModel.json.source, 'plugin', '固定后来源要标成 plugin')
+  assert.equal(fixedModel.json.provider, 'deepseek-official')
+  assert.equal(fixedModel.json.model, 'deepseek-flash')
+  assert.equal(fixedModel.json.reasoningEffort, 'low')
+
+  const reset = await post('/ai-model', { aiModel: { mode: 'session' } })
+  assert.equal(reset.json.aiModel.mode, 'session')
+  const back = await get('/card/model')
+  assert.equal(back.json.source, 'default', '改回 session 后不再走插件设置（本测试没有会话模型）')
+})
+
+await check('POST /ai-model 给个残缺设置要 400，不能存半截', async () => {
+  const res = await post('/ai-model', { aiModel: { mode: 'fixed', provider: 'p' } })
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /必须同时给出/)
 })
 
 fs.rmSync(root, { recursive: true, force: true })

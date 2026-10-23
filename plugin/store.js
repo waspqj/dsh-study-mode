@@ -21,7 +21,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-import { rankDocs, jaccard, tokenSet, tokenize, entryTokenSet, tokenSetWithCompounds } from './rank.js'
+import { rankDocs, jaccard, tokenSet, tokenize, entryTokenSet, tokenSetWithCompounds, createRanker } from './rank.js'
 import { formatVersion } from './format.js'
 
 /** 把主题显示名转成目录用的 slug。中文保留，只清理空白与标点。 */
@@ -74,10 +74,13 @@ export function createStore(root) {
   const topicsDir = path.join(root, 'topics')
   const bindingsFile = path.join(root, 'bindings.json')
   const settingsFile = path.join(root, 'settings.json')
+  const backupsDir = path.join(root, 'backups')
   const cache = new Map()
   /** 最近预览过的写入内容（hash → 时间），用于强制「先预览再写入」 */
   const previews = new Map()
   const PREVIEW_TTL_MS = 10 * 60 * 1000
+  /** 每个主题保留几份日备份（审计 P0-2） */
+  const BACKUP_KEEP = 7
 
   const now = () => new Date().toISOString()
 
@@ -140,8 +143,7 @@ export function createStore(root) {
   }
 
   function writeMeta(slug, meta) {
-    fs.mkdirSync(topicDir(slug), { recursive: true })
-    fs.writeFileSync(metaFile(slug), JSON.stringify(meta, null, 2), 'utf8')
+    atomicWriteFile(metaFile(slug), JSON.stringify(meta, null, 2))
   }
 
   function parseEntries(file) {
@@ -177,10 +179,105 @@ export function createStore(root) {
     return entries
   }
 
+  /**
+   * 原子写：写 .tmp → fsync 让内容真的落盘 → rename 覆盖。
+   *
+   * 2026-10-23 审计 P0-1：原来直接 writeFileSync 覆盖目标文件，进程在写到
+   * 一半时被杀掉 / 断电，留下的就是半截 JSONL —— 读回来全是坏行，整个主题
+   * 相当于报废。rename 在同一文件系统内是原子的，所以任何时刻目标文件要么
+   * 是完整旧版、要么是完整新版，不会出现中间态。
+   */
+  function atomicWriteFile(target, content) {
+    const dir = path.dirname(target)
+    fs.mkdirSync(dir, { recursive: true })
+    const tmp = target + '.tmp'
+    let fd = null
+    try {
+      fd = fs.openSync(tmp, 'w')
+      fs.writeFileSync(fd, content, 'utf8')
+      // 不 fsync 的话，数据可能还在内核页缓存里，崩溃后照样丢
+      fs.fsyncSync(fd)
+      fs.closeSync(fd)
+      fd = null
+      fs.renameSync(tmp, target)
+    } catch (error) {
+      if (fd !== null) {
+        try { fs.closeSync(fd) } catch { /* 已经坏了，关不上就算了 */ }
+      }
+      // 半截 .tmp 没用了，留着只会让人以为那是知识库
+      try { fs.unlinkSync(tmp) } catch { /* 还没有这个文件 */ }
+      throw error
+    }
+    // 目录项本身也落盘，否则崩溃后可能「文件写好了但目录里看不见」
+    try {
+      const dirFd = fs.openSync(dir, 'r')
+      try { fs.fsyncSync(dirFd) } finally { fs.closeSync(dirFd) }
+    } catch {
+      // Windows 上打不开目录句柄，这一步跳过，不影响 rename 的原子性
+    }
+  }
+
+  /** 本地日期键（YYYY-MM-DD）；备份按「用户所在的那一天」算，不按 UTC。 */
+  function dayKey(ms) {
+    const d = new Date(ms)
+    return (
+      d.getFullYear() +
+      '-' + String(d.getMonth() + 1).padStart(2, '0') +
+      '-' + String(d.getDate()).padStart(2, '0')
+    )
+  }
+
+  /**
+   * 备份轮转：每个主题留最近 7 份日快照，多了把最老的删掉。
+   * 只认 `kb-YYYY-MM-DD.jsonl` 这个命名，手工挪进来的文件不受影响。
+   */
+  function rotateBackups(slug) {
+    const dir = path.join(backupsDir, slug)
+    let names = []
+    try {
+      names = fs.readdirSync(dir)
+    } catch {
+      return
+    }
+    const snaps = names.filter(name => /^kb-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)).sort()
+    const excess = snaps.slice(0, Math.max(0, snaps.length - BACKUP_KEEP))
+    for (const name of excess) {
+      try { fs.unlinkSync(path.join(dir, name)) } catch { /* 删不掉就算了 */ }
+    }
+  }
+
+  /**
+   * 跨天备份：当天第一次改这个主题之前，把盘上那份（还是昨天写的）内容留一份快照。
+   *
+   * 2026-10-23 审计 P0-2：原来备份全靠手工，改一次库手动 cp 一次，
+   * 结果 topics/ 下堆了 6 个 .bak-*（626KB，占 learn 目录 74%），而且
+   * 没个章法 —— 该留哪份、留几份全凭记忆。现在：
+   *   - 每天每主题自动留一份 `backups/<slug>/kb-YYYY-MM-DD.jsonl`
+   *   - 只保留最近 7 份，更老的自动清掉
+   *   - 同一天里反复写不重复备份（内容本来就是今天的，没有跨天价值）
+   * 原子写（P0-1）保证「写坏」不会发生；这个保证「写完之后后悔了还能退回去」。
+   */
+  function backupBeforeWrite(slug) {
+    const target = topicFile(slug)
+    const stat = statFile(target)
+    if (stat) {
+      const today = dayKey(Date.now())
+      const dir = path.join(backupsDir, slug)
+      const snapshot = path.join(dir, `kb-${today}.jsonl`)
+      // 今天已经留过档 → 不用再做；盘上这份就是今天写的 → 备它没意义
+      if (!fs.existsSync(snapshot) && dayKey(stat.mtimeMs) !== today) {
+        fs.mkdirSync(dir, { recursive: true })
+        fs.copyFileSync(target, snapshot)
+      }
+    }
+    // 每次写都轮转：备份目录的上限不能只靠「刚好建了快照」那一次来维持
+    rotateBackups(slug)
+  }
+
   function writeEntries(slug, entries) {
-    fs.mkdirSync(topicDir(slug), { recursive: true })
     const body = entries.map(entry => JSON.stringify(entry)).join('\n')
-    fs.writeFileSync(topicFile(slug), body ? body + '\n' : '', 'utf8')
+    backupBeforeWrite(slug)
+    atomicWriteFile(topicFile(slug), body ? body + '\n' : '')
     cache.delete(topicFile(slug))
   }
 
@@ -194,6 +291,16 @@ export function createStore(root) {
     if (stat.mtimeMs !== observed.mtimeMs || stat.size !== observed.size) {
       throw new Error(`主题「${slug}」在你读取之后被其他会话改过，请重新读取后再写入`)
     }
+  }
+
+  /**
+   * 主题知识库文件的最后修改时刻（epoch 毫秒）；文件不存在返回 0。
+   *
+   * 拿来当缓存失效依据：知识库一动，这个时刻就变，基于它的缓存自动作废。
+   */
+  function topicStamp(slug) {
+    const stat = statFile(topicFile(slug))
+    return stat ? Math.round(stat.mtimeMs) : 0
   }
 
   function listTopics() {
@@ -323,8 +430,8 @@ export function createStore(root) {
   }
 
   function writeSettings(settings) {
-    ensureRoot()
-    fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2), 'utf8')
+    // 设置文件和知识库一样不能写一半：走原子写（审计 P0-1 同一套）
+    atomicWriteFile(settingsFile, JSON.stringify(settings, null, 2))
   }
 
   /** 设置/清除默认主题（新会话未绑定时用它） */
@@ -343,6 +450,52 @@ export function createStore(root) {
 
   function getDefaultTopic() {
     return readSettings().defaultTopic || null
+  }
+
+  /**
+   * 插件自己的 AI 调用用哪个模型（校验 / 追问 / 检索重排）。
+   *
+   * 默认 `{ mode: 'session' }` = 跟当前会话选的模型走（2026-10-22 用户定的规则）。
+   * 设成 `{ mode: 'fixed', provider, model, reasoningEffort }` 就固定用它 ——
+   * 这样为了「让校验快一点」而切模型时，不必把整个会话的模型也一起换掉。
+   *
+   * @returns {{mode: 'session'|'fixed', provider: string|null, model: string|null, reasoningEffort: string|null}}
+   */
+  function getAiModel() {
+    const raw = readSettings().aiModel
+    const mode = raw && raw.mode === 'fixed' ? 'fixed' : 'session'
+    if (mode !== 'fixed') return { mode: 'session', provider: null, model: null, reasoningEffort: null }
+    return {
+      mode: 'fixed',
+      provider: raw.provider ? String(raw.provider) : null,
+      model: raw.model ? String(raw.model) : null,
+      reasoningEffort: raw.reasoningEffort ? String(raw.reasoningEffort) : null,
+    }
+  }
+
+  /**
+   * 保存插件 AI 模型设置。传 `{ mode: 'session' }` 或 null 表示恢复跟随会话。
+   * @param {{mode?: string, provider?: string, model?: string, reasoningEffort?: string}|null} next
+   * @returns {object} 实际保存下来的设置（同 getAiModel 的形状）
+   */
+  function setAiModel(next) {
+    const settings = readSettings()
+    if (!next || next.mode !== 'fixed') {
+      delete settings.aiModel
+      writeSettings(settings)
+      return getAiModel()
+    }
+    const provider = String(next.provider || '').trim()
+    const model = String(next.model || '').trim()
+    if (!provider || !model) throw new Error('固定模型必须同时给出 provider 和 model')
+    settings.aiModel = {
+      mode: 'fixed',
+      provider,
+      model,
+      reasoningEffort: next.reasoningEffort ? String(next.reasoningEffort).trim() : null,
+    }
+    writeSettings(settings)
+    return getAiModel()
   }
 
   /** 预览内容的指纹：内容改过就要重新预览 */
@@ -383,7 +536,8 @@ export function createStore(root) {
   }
 
   /** 跨主题找相似条目：标题相似但正文差异大 → 可能是冲突（版本差异等）。 */
-  function findRelated(slug, cards) {
+  /** 其它主题里全部有效条目（跨主题重复/冲突检测的语料）。 */
+  function collectOtherEntries(slug) {
     const others = []
     for (const topic of listTopics()) {
       if (topic.slug === slug) continue
@@ -392,14 +546,20 @@ export function createStore(root) {
         others.push({ ...entry, topicSlug: topic.slug })
       }
     }
+    return others
+  }
+
+  function findRelated(slug, cards, others = collectOtherEntries(slug), ranker = null) {
     if (!others.length) return []
+    // 语料统计只建一次（审计 P1-3）：原来每张卡片都让 rankDocs 把全量重新分词
+    const search = ranker ? (query, limit) => ranker.search(query, limit) : (query, limit) => rankDocs(others, query, limit)
 
     const related = []
     for (const card of cards) {
       const title = String(card?.title ?? '').trim()
       if (!title) continue
       const query = `${title} ${String(card?.body ?? '').slice(0, 120)}`
-      const hits = rankDocs(others, query, 3)
+      const hits = search(query, 3)
       for (const hit of hits) {
         if (hit.score < 2) continue
         const titleSim = jaccard(tokenSet(title), tokenSet(hit.title))
@@ -433,11 +593,22 @@ export function createStore(root) {
    * 判定：标题词在候选条目里的覆盖率 ≥ 0.45 且 BM25 分数过线 → 判「疑似重复」。
    * 同标题的走「更新升版本」，不算重复。
    */
-  function findSimilarInTopic(slug, cards) {
-    const entries = readEntries(slug).filter(entry => (entry.status || 'active') === 'active')
+  function findSimilarInTopic(slug, cards, pool = null, ranker = null) {
+    const entries = pool || readEntries(slug).filter(entry => (entry.status || 'active') === 'active')
     if (!entries.length) return []
     const byId = new Map(entries.map(entry => [entry.id, entry]))
     const N = entries.length
+    // 条目全字段词集合缓存：同一批卡片反复命中同一条目时不用重新分词
+    const tokenCache = new Map()
+    const tokensOf = entry => {
+      let set = tokenCache.get(entry.id)
+      if (!set) {
+        set = entryTokenSet(entry)
+        tokenCache.set(entry.id, set)
+      }
+      return set
+    }
+    const search = ranker ? (query, limit) => ranker.search(query, limit) : (query, limit) => rankDocs(entries, query, limit)
 
     // 语料词频 → idf：通用词（间隙锁/页）在多条里都出现，权重低；
     // 专有词（innodb_page_size/16KB）只在一两条里出现，权重大。
@@ -473,13 +644,13 @@ export function createStore(root) {
       if (!titleTerms.length) continue
       const body = String(card?.body ?? '')
       const bodyTerms = Array.from(tokenSetWithCompounds(body))
-      const hits = rankDocs(entries, `${title} ${body.slice(0, 160)}`, 5)
+      const hits = search(`${title} ${body.slice(0, 160)}`, 5)
       for (const hit of hits) {
         if (hit.score < 2.5) continue
         const entry = byId.get(hit.id)
         if (!entry) continue
         if (normalizeTitle(entry.title) === norm) continue
-        const entryTokens = entryTokenSet(entry)
+        const entryTokens = tokensOf(entry)
         // 标题与正文两路都要够像，才算「疑似重复」；只有一路像 = 相关但不同的事
         const titleScore = weightedCoverage(titleTerms, entryTokens)
         const bodyScore = weightedCoverage(bodyTerms, entryTokens)
@@ -503,9 +674,10 @@ export function createStore(root) {
   /**
    * 同主题里最相关的几条（给人和模型做参照；抓不到转述型重复，但能提供上下文）。
    */
-  function findNearbyInTopic(slug, cards) {
-    const entries = readEntries(slug).filter(entry => (entry.status || 'active') === 'active')
+  function findNearbyInTopic(slug, cards, pool = null, ranker = null) {
+    const entries = pool || readEntries(slug).filter(entry => (entry.status || 'active') === 'active')
     if (!entries.length) return []
+    const search = ranker ? (query, limit) => ranker.search(query, limit) : (query, limit) => rankDocs(entries, query, limit)
     const out = []
     const seen = new Set()
     for (const card of cards) {
@@ -513,7 +685,7 @@ export function createStore(root) {
       if (!title) continue
       const norm = normalizeTitle(title)
       const body = String(card?.body ?? '')
-      const hits = rankDocs(entries, `${title} ${body.slice(0, 160)}`, 3)
+      const hits = search(`${title} ${body.slice(0, 160)}`, 3)
       for (const hit of hits) {
         if (normalizeTitle(hit.title) === norm) continue
         if (seen.has(hit.id)) continue
@@ -582,9 +754,18 @@ export function createStore(root) {
       })
     }
 
-    const related = findRelated(slug, cards)
-    const similar = findSimilarInTopic(slug, cards)
-    const nearby = findNearbyInTopic(slug, cards)
+    // 语料统计只准备一次（审计 P1-3）：三个检查都拿同一批条目做 BM25，
+    // 原来每张卡片都让 rankDocs 把整库重新分词一遍 —— 250 张卡就是 250 遍。
+    // DSH_KB_LEGACY_RANK=1 可切回旧路（每卡重建统计），留作对照与逃生舱。
+    const legacyRank = process.env.DSH_KB_LEGACY_RANK === '1'
+    const pool = entries.filter(entry => (entry.status || 'active') === 'active')
+    const topicRanker = legacyRank ? null : createRanker(pool)
+    const others = collectOtherEntries(slug)
+    const otherRanker = !legacyRank && others.length ? createRanker(others) : null
+
+    const related = findRelated(slug, cards, others, otherRanker)
+    const similar = findSimilarInTopic(slug, cards, pool, topicRanker)
+    const nearby = findNearbyInTopic(slug, cards, pool, topicRanker)
 
     if (!dryRun) {
       assertUnchanged(slug, observed)
@@ -986,10 +1167,13 @@ export function createStore(root) {
     findTopic,
     createTopic,
     readEntries,
+    topicStamp,
     currentTopic,
     bindTopic,
     setDefaultTopic,
     getDefaultTopic,
+    getAiModel,
+    setAiModel,
     markPreviewed,
     hasPreviewed,
     planSave,

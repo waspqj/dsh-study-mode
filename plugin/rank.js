@@ -159,95 +159,129 @@ function strength(score, coverage, best) {
 }
 
 /**
- * 在候选条目中检索。
+ * 预构建检索器：把语料统计（分词、词频、df/avg）算**一次**，之后反复检索都复用。
+ *
+ * 2026-10-23 审计 P1-3：原来 rankDocs 每调用一次就把整个语料重新分词一遍
+ * —— 4 个字段全量 tokenize + 重建 df 表。而 planSave 是「每张卡片调一次」，
+ * 于是 250 张卡 × 250 条 = 全库被分词 250 遍，这是批量入库慢的主因
+ * （不是写盘：写盘本来就只写一次）。
+ * 建一次检索器、循环里复用，复杂度从 O(卡数 × 语料) 的分词降到 O(语料)。
+ */
+export function createRanker(docs) {
+  const fields = Object.keys(FIELD_WEIGHTS)
+  const list = Array.isArray(docs) ? docs : []
+  const N = list.length
+
+  // 每篇文档、每个字段：token 列表 + 词频表
+  const perDoc = list.map(doc => {
+    const byField = {}
+    for (const field of fields) {
+      const tokens = fieldTokens(doc, field)
+      const tf = new Map()
+      for (const token of tokens) tf.set(token, (tf.get(token) || 0) + 1)
+      byField[field] = { tokens, tf, length: tokens.length }
+    }
+    return byField
+  })
+
+  // 每个字段的语料统计：文档长度、文档频率、平均长度
+  const stats = {}
+  for (const field of fields) {
+    const docLens = new Array(N)
+    const df = new Map()
+    let total = 0
+    for (let i = 0; i < N; i++) {
+      const { tokens } = perDoc[i][field]
+      docLens[i] = tokens.length
+      total += tokens.length
+      for (const term of new Set(tokens)) df.set(term, (df.get(term) || 0) + 1)
+    }
+    stats[field] = { docLens, df, avg: total / Math.max(1, N) }
+  }
+
+  function search(query, limit = 3, options = {}) {
+    const minRelative = typeof options.minRelative === 'number' ? options.minRelative : MIN_RELATIVE
+    const queryText = String(query ?? '').trim()
+    const queryTokens = tokenize(queryText)
+    if (!N || !queryTokens.length) return []
+
+    const allTerms = Array.from(new Set(queryTokens))
+    // 只让"内容词"参与打分。全是停用词时退回原样，免得整条查询被清空。
+    const contentTerms = allTerms.filter(term => !QUERY_STOP.has(term))
+    const queryTerms = contentTerms.length ? contentTerms : allTerms
+
+    const scored = []
+    for (let index = 0; index < N; index++) {
+      const doc = list[index]
+      let score = 0
+      const matched = new Set()
+
+      for (const field of fields) {
+        const tf = perDoc[index][field].tf
+        const length = stats[field].docLens[index] || 0
+        const avg = stats[field].avg || 1
+
+        let fieldScore = 0
+        for (const term of queryTerms) {
+          const frequency = tf.get(term) || 0
+          if (!frequency) continue
+          matched.add(term)
+          const df = stats[field].df.get(term) || 0
+          const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5))
+          const norm = K1 * (1 - B + B * (length / avg))
+          fieldScore += (idf * (frequency * (K1 + 1))) / (frequency + norm)
+        }
+        score += fieldScore * FIELD_WEIGHTS[field]
+      }
+
+      // 整句命中：小语料下把精确匹配顶到前面
+      const needle = queryText.toLowerCase()
+      const title = String(doc.title || '').toLowerCase()
+      const body = String(doc.body || '').toLowerCase()
+      if (title.includes(needle)) score += 4
+      else if (body.includes(needle)) score += 2
+
+      scored.push({ doc, score, matched: Array.from(matched) })
+    }
+
+    const sorted = scored.filter(item => item.score > 0).sort((a, b) => b.score - a.score)
+    const bestScore = sorted[0]?.score ?? 0
+    // 门槛只看相对分：绝对分在小语料里没有可比性，最佳分的比例才有。
+    const kept = sorted.filter(item => item.score >= bestScore * minRelative)
+
+    return kept
+      .slice(0, Math.max(1, limit))
+      .map(item => ({
+        id: item.doc.id,
+        topic: item.doc.topicSlug || item.doc.topic || null,
+        kind: item.doc.kind || 'point',
+        title: item.doc.title,
+        q: item.doc.q || null,
+        body: truncate(item.doc.body, 400),
+        tags: item.doc.tags || [],
+        source: item.doc.source || null,
+        verified: item.doc.verified ?? false,
+        appliesTo: item.doc.appliesTo || null,
+        version: item.doc.version || 1,
+        updatedAt: item.doc.updatedAt || null,
+        score: round2(item.score),
+        coverage: Math.round((item.matched.length / Math.max(1, queryTerms.length)) * 100) / 100,
+        strength: strength(item.score, item.matched.length / Math.max(1, queryTerms.length), bestScore),
+        matched: item.matched.slice(0, 6),
+      }))
+  }
+
+  return { docs: list, size: N, search }
+}
+
+/**
+ * 在候选条目中检索（一次性调用：语料统计用完即弃）。
+ * 需要对同一批语料反复检索时，请用 createRanker 建检索器复用。
  * @param {object[]} docs 候选条目
  * @param {string} query 查询串
  * @param {number} limit 返回条数
  * @param {{minRelative?: number}} [options] minRelative：相对分门槛，默认 MIN_RELATIVE
  */
 export function rankDocs(docs, query, limit = 3, options = {}) {
-  const minRelative = typeof options.minRelative === 'number' ? options.minRelative : MIN_RELATIVE
-  const queryText = String(query ?? '').trim()
-  const queryTokens = tokenize(queryText)
-  if (!docs.length || !queryTokens.length) return []
-
-  const fields = Object.keys(FIELD_WEIGHTS)
-  const stats = {}
-  for (const field of fields) {
-    const docLens = []
-    const df = new Map()
-    for (const doc of docs) {
-      const tokens = fieldTokens(doc, field)
-      docLens.push(tokens.length)
-      for (const term of new Set(tokens)) df.set(term, (df.get(term) || 0) + 1)
-    }
-    const total = docLens.reduce((sum, len) => sum + len, 0)
-    stats[field] = { docLens, df, avg: total / Math.max(1, docLens.length) }
-  }
-
-  const N = docs.length
-  const allTerms = Array.from(new Set(queryTokens))
-  // 只让"内容词"参与打分。全是停用词时退回原样，免得整条查询被清空。
-  const contentTerms = allTerms.filter(term => !QUERY_STOP.has(term))
-  const queryTerms = contentTerms.length ? contentTerms : allTerms
-
-  const scored = docs.map((doc, index) => {
-    let score = 0
-    const matched = new Set()
-
-    for (const field of fields) {
-      const tokens = fieldTokens(doc, field)
-      const tf = new Map()
-      for (const token of tokens) tf.set(token, (tf.get(token) || 0) + 1)
-      const length = stats[field].docLens[index] || 0
-      const avg = stats[field].avg || 1
-
-      let fieldScore = 0
-      for (const term of queryTerms) {
-        const frequency = tf.get(term) || 0
-        if (!frequency) continue
-        matched.add(term)
-        const df = stats[field].df.get(term) || 0
-        const idf = Math.log(1 + (N - df + 0.5) / (df + 0.5))
-        const norm = K1 * (1 - B + B * (length / avg))
-        fieldScore += (idf * (frequency * (K1 + 1))) / (frequency + norm)
-      }
-      score += fieldScore * FIELD_WEIGHTS[field]
-    }
-
-    // 整句命中：小语料下把精确匹配顶到前面
-    const needle = queryText.toLowerCase()
-    const title = String(doc.title || '').toLowerCase()
-    const body = String(doc.body || '').toLowerCase()
-    if (title.includes(needle)) score += 4
-    else if (body.includes(needle)) score += 2
-
-    return { doc, score, matched: Array.from(matched) }
-  })
-
-  const sorted = scored.filter(item => item.score > 0).sort((a, b) => b.score - a.score)
-  const bestScore = sorted[0]?.score ?? 0
-  // 门槛只看相对分：绝对分在小语料里没有可比性，最佳分的比例才有。
-  const kept = sorted.filter(item => item.score >= bestScore * minRelative)
-
-  return kept
-    .slice(0, Math.max(1, limit))
-    .map(item => ({
-      id: item.doc.id,
-      topic: item.doc.topicSlug || item.doc.topic || null,
-      kind: item.doc.kind || 'point',
-      title: item.doc.title,
-      q: item.doc.q || null,
-      body: truncate(item.doc.body, 400),
-      tags: item.doc.tags || [],
-      source: item.doc.source || null,
-      verified: item.doc.verified ?? false,
-      appliesTo: item.doc.appliesTo || null,
-      version: item.doc.version || 1,
-      updatedAt: item.doc.updatedAt || null,
-      score: round2(item.score),
-      coverage: Math.round((item.matched.length / Math.max(1, queryTerms.length)) * 100) / 100,
-      strength: strength(item.score, item.matched.length / Math.max(1, queryTerms.length), bestScore),
-      matched: item.matched.slice(0, 6),
-    }))
+  return createRanker(docs).search(query, limit, options)
 }

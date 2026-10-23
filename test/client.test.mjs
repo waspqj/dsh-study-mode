@@ -308,6 +308,11 @@ const fixtures = {
 
 const okJson = (data) => ({ ok: true, status: 200, json: async () => data })
 
+/** /entries 返回的列表：用例可以换成「正文被截断」的版本（审计 P1-8） */
+let currentEntries = null
+/** /entry 返回的正文全文 */
+let currentFullBody = '完整正文：' + '细节'.repeat(120)
+
 /** AI 校验返回的问题列表：默认一条，用例可以改。 */
 let currentIssues = [{ text: 'TCP 首部长度写反了：固定 20 字节，可变 20~60 字节' }]
 let currentAdditions = []
@@ -317,6 +322,8 @@ let currentParseError = false
 let currentModel = 'deepseek-flash'
 /** /card/versions 返回的「库里现在版本」：用来测过期卡片 */
 let currentStoreVersion = 2
+/** /ai-model 的设置：模型选择器用例会改它 */
+let currentAiModel = { mode: 'session', provider: null, model: null, reasoningEffort: null }
 const reviewIssues = () => currentIssues
 
 const sandbox = {
@@ -340,7 +347,54 @@ const sandbox = {
     })
     const route = String(url).split('?')[0]
     if (route.endsWith('/overview')) return okJson(fixtures.overview)
-    if (route.endsWith('/entries')) return okJson(fixtures.entries)
+    if (route.endsWith('/entries')) return okJson(currentEntries || fixtures.entries)
+    // 插件 AI 模型设置 + 可选模型目录（GET 读、POST 存）
+    if (route.endsWith('/ai-model')) {
+      if (String(options.method || 'GET').toUpperCase() === 'POST') {
+        const body = options.body ? JSON.parse(options.body) : {}
+        currentAiModel = (body && body.aiModel) || { mode: 'session' }
+        return okJson({ ok: true, aiModel: currentAiModel })
+      }
+      return okJson({
+        ok: true,
+        aiModel: currentAiModel,
+        session: { provider: 'deepseek-official', model: currentModel, reasoningEffort: 'high' },
+        active:
+          currentAiModel.mode === 'fixed'
+            ? { ...currentAiModel, source: 'plugin' }
+            : { provider: 'deepseek-official', model: currentModel, reasoningEffort: 'high', source: 'session' },
+        catalog: [
+          {
+            provider: 'deepseek-official',
+            providerName: 'DeepSeek 官方',
+            id: 'deepseek-flash',
+            name: 'deepseek-flash',
+            contextWindow: 128000,
+            efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+            defaultEffort: 'high',
+          },
+          {
+            provider: 'minimax',
+            providerName: 'MiniMax 官方',
+            id: 'MiniMax-M3.1-Flash',
+            name: 'MiniMax-M3.1-Flash',
+            contextWindow: 1000000,
+            efforts: [],
+            defaultEffort: null,
+          },
+        ],
+      })
+    }
+    // 单条详情：列表只给摘要，正文全文在这里取（审计 P1-8）
+    if (route.endsWith('/entry')) {
+      const id = String(new URL(url, 'http://127.0.0.1').searchParams.get('id') || '')
+      const base = (currentEntries || fixtures.entries).entries.find(item => item.id === id)
+      if (!base) return okJson({ ok: true, entry: null })
+      return okJson({
+        ok: true,
+        entry: { ...base, body: currentFullBody, bodyTruncated: false, bodyLength: currentFullBody.length },
+      })
+    }
     if (route.endsWith('/search')) return okJson(fixtures.search)
     // 打开校验面板时先问「会用哪个模型」，好在标题旁边标出来
     if (route.endsWith('/card/model')) {
@@ -738,6 +792,37 @@ await check('填完标题与正文 → POST /add 带主题、类型、标签', a
   assert.equal(call.body.tags, '锁, InnoDB')
 })
 
+
+console.log('列表摘要 → 详情取全文（审计 P1-8）')
+await check('正文被截断时，详情另取全文（不会拿摘要当正文编辑）', async () => {
+  const base = fixtures.entries.entries[0]
+  currentEntries = {
+    ...fixtures.entries,
+    entries: [{ ...base, body: base.body.slice(0, 20) + '…', bodyTruncated: true, bodyLength: 300 }],
+  }
+  try {
+    const view = await run(Panel, {})
+    calls.length = 0
+    const card = find(view.tree, (node) => node.tag === 'article')
+    assert.ok(card, '找不到卡片')
+    await card.props.onClick()
+    await sleep(30)
+    const detailCalls = calls.filter(item => item.url.includes('/entry'))
+    assert.equal(detailCalls.length, 1, '应该去取一次详情')
+    const opened = await run(Panel, {})
+    assert.match(opened.html, /完整正文/, '详情浮层要显示取回来的全文')
+    assert.ok(!opened.html.includes('正在取完整正文'), '取回来之后不该还停在加载态')
+  } finally {
+    currentEntries = null
+    // 把面板里的列表拉回原样：别把截断版留给后面的用例
+    const restored = await run(Panel, {})
+    const refresh = findButton(restored.tree, '刷新')
+    if (refresh) {
+      await refresh.props.onClick()
+      await sleep(20)
+    }
+  }
+})
 
 console.log('两列网格与详情浮层')
 await check('卡片排进两列网格容器', async () => {
@@ -1759,6 +1844,91 @@ await check('版本一致 → 两个按钮照常可用', async () => {
   assert.equal(review.props.disabled, false, '不过期就不该禁用')
   assert.equal(edit.props.disabled, false, '不过期就不该禁用')
   assert.ok(!view.html.includes('库里已更新到'), '不过期就不该出现过期提示')
+})
+
+console.log('版本查询合并（审计 P1-7）')
+const versionCalls = () => calls.filter(c => c.url.includes('/card/versions'))
+
+await check('同一批卡片的版本查询合并成一次请求', async () => {
+  api.clearCardVersionCache()
+  const before = versionCalls().length
+  const results = await Promise.all([
+    api.fetchCardVersions(['k1'], '面试'),
+    api.fetchCardVersions(['k2'], '面试'),
+    api.fetchCardVersions(['k3'], '面试'),
+    api.fetchCardVersions(['k4'], '面试'),
+    api.fetchCardVersions(['k5'], '面试'),
+  ])
+  const after = versionCalls()
+  assert.equal(after.length - before, 1, '5 张卡应该只发 1 个请求，而不是 5 个')
+  const ids = new URL(after[after.length - 1].url, 'http://127.0.0.1').searchParams.get('ids')
+  assert.deepEqual(ids.split(','), ['k1', 'k2', 'k3', 'k4', 'k5'], '一个请求里要带上全部 id')
+  assert.ok(results[0].k1, '每个调用方都要拿到自己那张卡的结果')
+  assert.ok(results[4].k5)
+})
+
+await check('超过 50 张卡时分批问，一个都不能少', async () => {
+  api.clearCardVersionCache()
+  const before = versionCalls().length
+  const many = Array.from({ length: 55 }, (_, i) => 'm' + i)
+  const map = await api.fetchCardVersions(many, '面试')
+  const after = versionCalls()
+  assert.equal(after.length - before, 2, '55 个 id 应该分 2 批问')
+  assert.equal(Object.keys(map).length, 55, '一个都不能少')
+})
+
+console.log('插件 AI 模型选择器（2026-10-23「模型要能切换」）')
+/** 收集树里所有模型选择器（模型下拉 + 档位下拉） */
+function collectModelSelects(tree, out = []) {
+  if (!tree || typeof tree !== 'object') return out
+  if (tree.tag === 'select' && String(tree.props && tree.props.className).includes('kb-ai-model-select')) {
+    out.push(tree)
+  }
+  for (const child of tree.children || []) collectModelSelects(child, out)
+  const kids = tree.props && tree.props.children
+  if (kids) for (const kid of Array.isArray(kids) ? kids : [kids]) collectModelSelects(kid, out)
+  return out
+}
+
+await check('面板头部有模型选择器，默认「跟随会话」并列出可选模型', async () => {
+  currentAiModel = { mode: 'session', provider: null, model: null, reasoningEffort: null }
+  const view = await run(Panel, {})
+  const selects = collectModelSelects(view.tree)
+  assert.equal(selects.length, 1, '跟随会话时只有一个模型选择器，实际 ' + selects.length)
+  assert.equal(selects[0].props.value, '__session__', '默认应该跟随会话')
+  assert.ok(view.html.includes('跟随会话'), '缺「跟随会话」选项')
+  assert.ok(view.html.includes('deepseek-flash'), '缺枚举出来的模型')
+  assert.ok(view.html.includes('MiniMax-M3.1-Flash'), '缺第二个 provider 的模型')
+})
+
+await check('选具体模型 → POST /ai-model 固定 provider + model', async () => {
+  calls.length = 0
+  const view = await run(Panel, {})
+  const select = collectModelSelects(view.tree)[0]
+  await select.props.onChange({ target: { value: 'deepseek-official|deepseek-flash' } })
+  await sleep(30)
+  const posted = calls.find(item => item.url.includes('/ai-model') && item.method === 'POST')
+  assert.ok(posted, '没发出保存请求')
+  assert.equal(posted.body.aiModel.mode, 'fixed')
+  assert.equal(posted.body.aiModel.provider, 'deepseek-official')
+  assert.equal(posted.body.aiModel.model, 'deepseek-flash')
+})
+
+await check('固定后出现档位选择器，改档位会带上当前模型', async () => {
+  currentAiModel = { mode: 'fixed', provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: null }
+  const view = await run(Panel, {})
+  const selects = collectModelSelects(view.tree)
+  assert.equal(selects.length, 2, '固定模型且有档位时应该有两个选择器，实际 ' + selects.length)
+  const effortSelect = selects[1]
+  calls.length = 0
+  await effortSelect.props.onChange({ target: { value: 'low' } })
+  await sleep(30)
+  const posted = calls.find(item => item.url.includes('/ai-model') && item.method === 'POST')
+  assert.ok(posted, '没发出保存请求')
+  assert.equal(posted.body.aiModel.mode, 'fixed')
+  assert.equal(posted.body.aiModel.model, 'deepseek-flash', '改档位不能把选中的模型弄丢')
+  assert.equal(posted.body.aiModel.reasoningEffort, 'low')
+  currentAiModel = { mode: 'session', provider: null, model: null, reasoningEffort: null }
 })
 
 console.log('')

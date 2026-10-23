@@ -22,6 +22,7 @@ import path from 'node:path'
 import { createStore, slugify } from './store.js'
 import { rankDocs, CANDIDATE_RELATIVE, MIN_RELATIVE } from './rank.js'
 import { rerankHits, MAX_RELATED } from './rerank.js'
+import { resolveSelection, setModelPreference } from './llm.js'
 
 export const name = 'learning-kb'
 
@@ -39,6 +40,44 @@ function resolveRoot() {
 function sessionIdOf(exec) {
   const id = exec?.agent?.id
   return id ? String(id) : null
+}
+
+/**
+ * 重排结果缓存。
+ *
+ * 2026-10-23 审计 P1-5：重排是一次真实的模型调用，要 2~10 秒。同一轮对话里
+ * 换个说法问同一个问题、或模型先自己搜一遍再让我搜一遍，都会重复付这个钱。
+ * 这里按「查询 + 检索范围 + 知识库版本 + 用的哪个模型」做键，10 分钟内复用。
+ *
+ * 知识库版本 = 被检索到的每个主题 kb.jsonl 的最后修改时刻（毫秒）。
+ * 知识库一改，时刻就变，缓存自动作废 —— 不会拿旧结果糊弄新内容。
+ */
+const RERANK_CACHE_TTL_MS = 10 * 60 * 1000
+const RERANK_CACHE_MAX = 50
+const rerankCache = new Map()
+
+/** 取缓存；过期或没有就返回 null。 */
+function readRerankCache(key) {
+  const hit = rerankCache.get(key)
+  if (!hit) return null
+  if (Date.now() - hit.at > RERANK_CACHE_TTL_MS) {
+    rerankCache.delete(key)
+    return null
+  }
+  return hit
+}
+
+/** 写缓存；顺手把过期的清掉，条数超了就丢最老的一条。 */
+function writeRerankCache(key, value) {
+  const now = Date.now()
+  for (const [k, v] of rerankCache) {
+    if (now - v.at > RERANK_CACHE_TTL_MS) rerankCache.delete(k)
+  }
+  rerankCache.set(key, { at: now, value })
+  while (rerankCache.size > RERANK_CACHE_MAX) {
+    const oldest = rerankCache.keys().next().value
+    rerankCache.delete(oldest)
+  }
 }
 
 function text(value) {
@@ -444,6 +483,10 @@ async function runSave({ ctx, store, args, exec }) {
 
 export function apply(ctx) {
   const store = createStore(resolveRoot())
+  // 检索重排也走 llm.js 的 callModel：把「插件自己的模型设置」挂上，
+  // 否则这里会自顾自跟会话模型走，用户在面板里换的模型对重排不生效。
+  // （两个半侧在同一进程、共用同一个 llm.js 模块实例，所以设一次就都生效。）
+  setModelPreference(() => store.getAiModel())
 
   ctx.tools.register({
     name: 'learn_topics',
@@ -666,12 +709,27 @@ export function apply(ctx) {
 
       // 大模型重排：把候选分成「直接命中」和「相关补充」，无关的丢掉。
       // 任何失败（没模型 / 超时 / 返回不合法）都退回本地排序，卡片照常出。
-      const split = await rerankHits({
-        ctx,
-        query,
-        hits: candidates,
-        limits: { limit, maxRelated: MAX_RELATED },
-      })
+      //
+      // 缓存（审计 P1-5）：同一个问题 + 同一份知识库 + 同一个模型，10 分钟内不重复调模型。
+      // 知识库一改就自动作废；模型失败的结果不缓存（免得模型恢复后还拿着旧失败）。
+      const selection = resolveSelection(ctx)
+      const kbStamp = slugs.map(slug => `${slug}@${store.topicStamp(slug)}`).join(',')
+      const cacheKey = [query, scope, limit, tag || '', selection.model || '', kbStamp].join('|')
+      const cached = readRerankCache(cacheKey)
+      let split
+      let fromCache = false
+      if (cached) {
+        split = cached.value
+        fromCache = true
+      } else {
+        split = await rerankHits({
+          ctx,
+          query,
+          hits: candidates,
+          limits: { limit, maxRelated: MAX_RELATED },
+        })
+        if (split.used) writeRerankCache(cacheKey, split)
+      }
 
       let matched = split.matched
       let related = split.related
@@ -689,7 +747,13 @@ export function apply(ctx) {
         total,
         hits: matched,
         related,
-        rerank: { used: split.used, reason: split.reason || '', usage: split.usage || null },
+        rerank: {
+          used: split.used,
+          reason: split.reason || '',
+          // 走缓存时没有新的模型调用，用量不该再报一遍（否则界面上的 token 累计会虚高）
+          usage: fromCache ? null : split.usage || null,
+          cached: fromCache,
+        },
         currentTopic: currentSlug,
         note: currentSlug ? '' : '当前会话没绑定主题，已按整体库检索。入库前请先用 learn_topics 指定主题。',
       }

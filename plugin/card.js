@@ -140,6 +140,7 @@ export function buildReviewPrompt(card, mode) {
     `6. additions 最多 ${MAX_ADDITIONS} 条、每条不超过 ${ADDITION_MAX_CHARS} 字，只写"卡里确实缺的事实点"，不要展开成讲解。`,
     '7. 不要输出表格、多级标题、教程式清单、追问预备清单 —— 正文格式只有：首行结论 + "- " 要点。',
     '8. suggested 只在结构确实需要重排时才给，且不要比原文多出新的章节；没有要改的就给空字符串。',
+    '9. 不要输出思考过程：不要逐条权衡、不要列举可能性、不要自我复核；心里决定完就直接写 JSON，第一个字符必须是 {。',
   ].join('\n')
 
   const prompt = [
@@ -269,6 +270,7 @@ export function buildAskPrompt(card, question, history) {
     '1. 卡片里没有的信息，直接说「这条卡片里没有」并给出建议去问哪个主题，不要凭记忆补充。',
     '2. 不要引入会话里的其它内容 —— 你看不到，也不需要。',
     '3. 回答用中文，简洁；必要时可以用 "- " 列点。',
+    '4. 不要输出思考过程：不要分析、不要列举选项、不要自我复核；直接给结论，第一句话就是答案。',
   ].join('\n')
 
   const turns = Array.isArray(history) ? history.slice(-6) : []

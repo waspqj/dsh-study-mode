@@ -268,5 +268,65 @@ await check('内容不相近 → 不报疑似重复', async () => {
   assert.equal(result.similar.length, 0)
 })
 
+console.log('重排缓存（审计 P1-5）')
+// 给 ctx 挂一个假模型：统计它被调了几次。挂上之前的用例不受影响（那时没有模型，走本地排序）。
+const originalGet = ctx.get
+let modelCalls = 0
+let mockMatchId = ''
+ctx.get = (serviceName) => {
+  if (serviceName === 'llm') {
+    return {
+      stream() {
+        modelCalls++
+        return (async function* () {
+          yield { type: 'text-delta', text: JSON.stringify({ match: mockMatchId ? [mockMatchId] : [], related: [], drop: [] }) }
+          yield { type: 'finish', reason: { kind: 'stop' } }
+        })()
+      },
+    }
+  }
+  return originalGet(serviceName)
+}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+await check('同一个问题连搜两次，第二次走缓存不再调模型', async () => {
+  const cacheExec = { agent: { id: 'sess-cache' } }
+  topics.execute({ action: 'create', name: '缓存测试主题' }, cacheExec)
+  const card = { title: '缓存测试卡片', body: '这条内容专门用来测重排缓存。' }
+  await save.execute({ cards: [card] }, cacheExec)
+  await save.execute({ approved: true, cards: [card] }, cacheExec)
+  // 假模型要能真的判出一条命中，否则会被当成「模型失败」，按设计不入缓存
+  const listed = entries.execute({}, cacheExec)
+  mockMatchId = (listed.entries.find(entry => entry.title === '缓存测试卡片') || {}).id || ''
+
+  const before = modelCalls
+  const first = await search.execute({ query: '缓存测试卡片', scope: 'all' }, cacheExec)
+  assert.equal(modelCalls, before + 1, '第一次应该真的调一次模型')
+  assert.equal(first.rerank.cached, false)
+  assert.equal(first.rerank.used, true, '假模型判出了命中')
+
+  const second = await search.execute({ query: '缓存测试卡片', scope: 'all' }, cacheExec)
+  assert.equal(modelCalls, before + 1, '第二次不该再调模型')
+  assert.equal(second.rerank.cached, true, '第二次应该标记为命中缓存')
+  assert.equal(second.rerank.usage, null, '走缓存没有新的调用，不该再报一次用量')
+  assert.equal(second.hits.length, first.hits.length, '缓存的结果要和第一次一样')
+})
+
+await check('知识库一改，缓存自动作废（会重新调模型）', async () => {
+  const cacheExec = { agent: { id: 'sess-cache' } }
+  // 先自己把缓存热起来，这条用例不依赖上一条的执行顺序
+  await search.execute({ query: '缓存测试卡片', scope: 'all' }, cacheExec)
+  const before = modelCalls
+  await search.execute({ query: '缓存测试卡片', scope: 'all' }, cacheExec)
+  assert.equal(modelCalls, before, '这一步应该还在缓存期内')
+  // 往库里写一条 → kb.jsonl 的 mtime 变了 → 缓存键跟着变
+  await sleep(30)
+  const card = { title: '缓存测试卡片二', body: '又一条内容，用来让知识库变一下。' }
+  await save.execute({ cards: [card] }, cacheExec)
+  await save.execute({ approved: true, cards: [card] }, cacheExec)
+  await search.execute({ query: '缓存测试卡片', scope: 'all' }, cacheExec)
+  assert.equal(modelCalls, before + 1, '知识库改过之后应该重新调模型')
+})
+
 fs.rmSync(root, { recursive: true, force: true })
 console.log(`\n${passed} 项断言通过`)

@@ -52,7 +52,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.16'
+    const UI_REV = '0.3.17'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -132,6 +132,12 @@ window.__ModuleLoader__.load({
         workModelTip: '跟当前会话选的模型一致；切了模型，下次校验就用新的',
         workRun: '让 AI 校验',
         workRunning: '校验中…',
+        // 等待时把话说清楚：思考型模型一次校验要几十秒到两分钟，
+        // 用户干等着会以为界面卡死了。2026-10-23 用户反馈「会卡很久」。
+        workWaiting: '思考型模型正在想，通常要 30–120 秒（已等 ',
+        workWaitingSec: ' 秒）',
+        workWaitedShort: '还在想，别以为它坏了。',
+        workThinking: '模型思考了 ',
         workRunAgain: '重新校验',
         workCachedNote: '用的是上次的结果，这次没调模型',
         workIssues: '发现的问题',
@@ -262,6 +268,10 @@ window.__ModuleLoader__.load({
         workModelTip: 'Matches the model selected in this session; switching it applies to the next review',
         workRun: 'Run AI review',
         workRunning: 'Reviewing…',
+        workWaiting: 'The model is thinking; usually 30–120s (waited ',
+        workWaitingSec: 's)',
+        workWaitedShort: 'Still thinking — it is not frozen.',
+        workThinking: 'Model thought ',
         workRunAgain: 'Run again',
         workCachedNote: 'Reused the previous result; the model was not called',
         workIssues: 'Issues found',
@@ -392,6 +402,8 @@ window.__ModuleLoader__.load({
 .kb-batch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 18px;border-top:1px solid var(--kb-line);background:var(--kb-rail);font-size:12px;color:var(--dsw-alias-label-secondary);flex:none}
 .kb-batch .kb-btn{font-size:12px}
 .kb-rev{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);opacity:.8;font-variant-numeric:tabular-nums;margin-right:2px}
+.kb-ai-model{display:inline-flex;align-items:center;gap:5px;flex:none}
+.kb-ai-model-select{max-width:180px;font-size:11px;padding:3px 5px;height:auto;line-height:1.4}
 .kb-score{font-size:10.5px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
 .kb-card-acts{position:absolute;right:6px;bottom:5px;display:flex;gap:4px;padding:2px 3px;border-radius:6px;background:color-mix(in srgb,var(--kb-card) 92%,transparent);opacity:0;pointer-events:none;transition:opacity .12s ease}
 .kb-card:hover .kb-card-acts,.kb-card:focus-within .kb-card-acts{opacity:1;pointer-events:auto}
@@ -1380,6 +1392,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const [busyId, setBusyId] = useState('')
       const [adding, setAdding] = useState(false)
       const [detail, setDetail] = useState(null)
+      // 打开详情前正在取正文全文（列表只给摘要）
+      const [detailLoading, setDetailLoading] = useState(false)
       const [multi, setMulti] = useState(false)
       const [picked, setPicked] = useState([])
       // 本页打开以来 AI 调用累计（校验 + 追问；不含检索重排）
@@ -1387,8 +1401,74 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const [tick, setTick] = useState(0)
       const alive = useRef(true)
       const noticeTimer = useRef(null)
+      /** 插件 AI 模型设置 + 可选模型目录（{aiModel, session, active, catalog}） */
+      const [aiModelData, setAiModelData] = useState(null)
+      const [aiModelBusy, setAiModelBusy] = useState(false)
 
       const refresh = useCallback(() => setTick((value) => value + 1), [])
+
+      /**
+       * 换插件 AI 调用用的模型。
+       *
+       * 「跟随会话」= 和主对话用同一个（旧行为）；选具体模型 = 只影响
+       * 校验/追问/检索重排这三条一次性调用，**不动主对话的模型**。
+       * 改完调 refresh() 让 /ai-model 与 /card/model 都重新拉一遍。
+       */
+      const chooseAiModel = async (next) => {
+        setAiModelBusy(true)
+        try {
+          const value = String((next && next.value) || '__session__')
+          let body
+          if (value === '__session__') {
+            body = { mode: 'session' }
+          } else {
+            const at = value.indexOf('|')
+            body = {
+              mode: 'fixed',
+              provider: value.slice(0, at),
+              model: value.slice(at + 1),
+              // 换模型时档位重置为「默认」；只改档位时把当前模型带上
+              reasoningEffort: next && next.effort ? String(next.effort) : null,
+            }
+          }
+          await apiPost('/ai-model', { aiModel: body })
+          refresh()
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setAiModelBusy(false)
+        }
+      }
+
+      /**
+       * 打开一条详情。
+       *
+       * 2026-10-23 审计 P1-8：列表接口现在只发 160 字摘要（一次少搬几十 KB），
+       * 正文全文要用 GET /entry 单独取。**取全了再开弹窗** ——
+       * 弹窗里的「编辑」是以正文为初值的，如果先拿摘要开弹窗、
+       * 用户手快点下编辑，存回去的就是截断的正文。
+       */
+      const openDetail = useCallback((item) => {
+        if (!item) return
+        if (!item.bodyTruncated) {
+          setDetail(item)
+          return
+        }
+        setDetailLoading(true)
+        apiGet('/entry', { id: item.id, topic: item.topic || '' })
+          .then((data) => {
+            if (!alive.current) return
+            const full = data && data.entry ? data.entry : null
+            setDetail(full ? { ...item, ...full } : item)
+          })
+          .catch(() => {
+            // 取不到就还是用摘要打开：不能因为详情接口挂了就把用户挡在外面
+            if (alive.current) setDetail(item)
+          })
+          .finally(() => {
+            if (alive.current) setDetailLoading(false)
+          })
+      }, [])
 
       useEffect(() => {
         alive.current = true
@@ -1413,6 +1493,20 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           .catch((err) => {
             if (err && err.name === 'AbortError') return
             setError(err instanceof Error ? err.message : String(err))
+          })
+        return () => controller.abort()
+      }, [tick])
+
+      // 插件自己的 AI 模型设置 + 可选的模型目录（校验 / 追问 / 重排用哪个模型）
+      useEffect(() => {
+        const controller = new AbortController()
+        apiGet('/ai-model', {}, controller.signal)
+          .then((data) => {
+            if (alive.current) setAiModelData(data)
+          })
+          .catch((err) => {
+            if (err && err.name === 'AbortError') return
+            // 枚举不到模型不是致命错误：选择器退回「跟随会话」，校验照常能用
           })
         return () => controller.abort()
       }, [tick])
@@ -1505,6 +1599,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             `${totalActive} 条 · ${topics.length} 个主题`,
           ),
           h('span', { className: 'kb-grow' }),
+          h(AiModelPicker, { data: aiModelData, busy: aiModelBusy, onChange: chooseAiModel }),
           tokenTotal > 0
             ? h(
                 'span',
@@ -1677,7 +1772,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 selectable: multi,
                 selected: picked.includes(entry.id),
                 onToggle: togglePick,
-                onOpen: (item) => setDetail(item),
+                onOpen: openDetail,
                 onArchive: (item) => mutate('/archive', { topic: item.topic, id: item.id }, t('archive')),
                 onRestore: (item) => mutate('/restore', { topic: item.topic, id: item.id }, t('restore')),
                 onDelete: (item) => mutate('/delete', { topic: item.topic, id: item.id }, t('remove')),
@@ -1707,6 +1802,17 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                   },
                 },
                 t('close'),
+              ),
+            )
+          : null,
+        detailLoading
+          ? h(
+              'div',
+              { className: 'kb-overlay' },
+              h(
+                'div',
+                { className: 'kb-modal' },
+                h('div', { className: 'kb-modal-body' }, '正在取完整正文…'),
               ),
             )
           : null,
@@ -2008,6 +2114,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     // 而用户根本看不出自己拿着旧版 —— 所以提前问一句，过期就把编辑类按钮禁用掉。
     const CARD_VERSION_TTL = 20_000
     const cardVersionCache = new Map()
+    /** 服务端一次最多接受 50 个 id（handleCardVersions 里 slice(0, 50)）。 */
+    const CARD_VERSION_BATCH_MAX = 50
 
     function cardVersionKey(id, topic) {
       return String(id || '') + '|' + String(topic || '')
@@ -2029,18 +2137,75 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       cardVersionCache.set(cardVersionKey(id, topic), { at: Date.now(), data })
     }
 
-    /** 库里这条现在是什么版本；拿不到（宿主没重启 / 请求失败）就返回 null —— 不乱禁用。 */
-    async function fetchCardVersion(id, topic) {
-      const cached = readCardVersion(id, topic)
-      if (cached) return cached
-      try {
-        const data = await apiGet('/card/versions', { ids: String(id), topic: String(topic || '') })
-        const info = data && data.versions ? data.versions[id] || null : null
-        if (info) writeCardVersion(id, topic, info)
-        return info
-      } catch {
-        return null
+    /**
+     * 同一批渲染里的卡片版本查询，合并成一次请求。
+     *
+     * 2026-10-23 审计 P1-7：原来每张卡片各发一次 GET /card/versions，
+     * 一轮回答出 8 张卡就是 8 个请求（host 实测每个 13.6ms，但那是串行等待）。
+     * 现在同一帧里所有卡片把自己的 id 报上来，攒齐了**一次**问完
+     * （接口本来就支持一次最多 50 个 id）。
+     */
+    const versionBatches = new Map()
+
+    function flushVersionBatch(topic) {
+      const batch = versionBatches.get(topic)
+      if (!batch) return
+      versionBatches.delete(topic)
+      const ids = Array.from(batch.ids)
+      const waiters = batch.waiters
+      const done = map => {
+        for (const resolve of waiters) resolve(map)
       }
+      if (!ids.length) {
+        done({})
+        return
+      }
+      // 服务端一次最多收 50 个 id，超了就分几批问，别把后面的悄悄丢掉
+      const chunks = []
+      for (let i = 0; i < ids.length; i += CARD_VERSION_BATCH_MAX) {
+        chunks.push(ids.slice(i, i + CARD_VERSION_BATCH_MAX))
+      }
+      const map = {}
+      Promise.all(
+        chunks.map(chunk =>
+          apiGet('/card/versions', { ids: chunk.join(','), topic: String(topic || '') })
+            .then(data => {
+              const versions = data && data.versions ? data.versions : {}
+              for (const id of chunk) {
+                const info = versions[id] || null
+                if (info) writeCardVersion(id, topic, info)
+                map[id] = info
+              }
+            })
+            .catch(() => {
+              // 拿不到就不乱禁用（和原来一样：请求失败一律不判定过期）
+            }),
+        ),
+      ).then(() => done(map))
+    }
+
+    /**
+     * 问一批卡片「库里现在是什么版本」。
+     * @param {string[]} ids 卡片 id
+     * @param {string} topic 主题
+     * @returns {Promise<Record<string, object|null>>} id → {version, updatedAt}
+     */
+    function fetchCardVersions(ids, topic) {
+      const list = Array.from(new Set((ids || []).filter(Boolean)))
+      if (!list.length) return Promise.resolve({})
+      const key = String(topic || '')
+      let batch = versionBatches.get(key)
+      if (!batch) {
+        batch = { ids: new Set(), waiters: [], timer: null }
+        versionBatches.set(key, batch)
+      }
+      for (const id of list) batch.ids.add(id)
+      return new Promise(resolve => {
+        batch.waiters.push(resolve)
+        if (batch.timer) return
+        // 同一帧里把大家的 id 收齐，再一次性发出去
+        batch.timer = setTimeout(() => flushVersionBatch(key), 0)
+      })
     }
 
     /** 手里这张卡是不是旧版：{ stale, current }。current = 库里现在的版本号。 */
@@ -2052,13 +2217,19 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       useEffect(() => {
         let alive = true
         if (!id) return undefined
-        fetchCardVersion(id, topic)
-          .then(info => {
-            if (!alive || !info) return
-            const current = Number(info.version) || 0
-            // 版本号不一样就算旧版：回退会让版本号往回走，单纯比大小会漏判
-            setState({ stale: current !== Number(version), current })
-          })
+        const apply = info => {
+          if (!alive || !info) return
+          const current = Number(info.version) || 0
+          // 版本号不一样就算旧版：回退会让版本号往回走，单纯比大小会漏判
+          setState({ stale: current !== Number(version), current })
+        }
+        const cached = readCardVersion(id, topic)
+        if (cached) {
+          apply(cached)
+          return undefined
+        }
+        fetchCardVersions([id], topic)
+          .then(map => apply(map && map[id]))
           .catch(() => {})
         return () => {
           alive = false
@@ -2099,6 +2270,101 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         ),
         desc ? h('div', { className: 'kb-vsec-desc' }, desc) : null,
         children,
+      )
+    }
+
+    /**
+     * 插件 AI 调用用哪个模型（校验 / 追问 / 检索重排）。
+     *
+     * 为什么不直接跟会话：为了绕开「某个模型一次校验要 100 秒」而切会话模型时，
+     * 会把主对话的模型也一起换掉。这里让这三条一次性调用单独选，互不影响。
+     * 选项来自宿主 llm 服务的 listProviders / listModels 枚举，不是写死的名单。
+     */
+    function AiModelPicker(props) {
+      const data = props.data
+      if (!data) return null
+      const current = data.aiModel || { mode: 'session' }
+      const catalog = Array.isArray(data.catalog) ? data.catalog : []
+      const session = data.session || null
+      const fixedKey = current.mode === 'fixed' ? current.provider + '|' + current.model : '__session__'
+      const fixedEntry =
+        current.mode === 'fixed'
+          ? catalog.find(item => item.provider === current.provider && item.id === current.model)
+          : null
+      const efforts = fixedEntry && Array.isArray(fixedEntry.efforts) ? fixedEntry.efforts : []
+      return h(
+        'span',
+        { className: 'kb-ai-model' },
+        h(
+          'select',
+          {
+            className: 'kb-select kb-ai-model-select',
+            value: fixedKey,
+            disabled: props.busy,
+            title:
+              '插件自己的 AI 调用（校验 / 追问 / 检索重排）用哪个模型；' +
+              '和主对话的模型相互独立，换这里不会换掉对话模型',
+            onChange: event => props.onChange({ value: event.target.value }),
+          },
+          [
+            h(
+              'option',
+              { key: '__session__', value: '__session__' },
+              'AI 模型：跟随会话' + (session && session.model ? '（' + session.model + '）' : ''),
+            ),
+            ...catalog.map(item =>
+              h(
+                'option',
+                { key: item.provider + '|' + item.id, value: item.provider + '|' + item.id },
+                item.name + '（' + item.providerName + '）',
+              ),
+            ),
+          ],
+        ),
+        fixedEntry && efforts.length
+          ? h(
+              'select',
+              {
+                className: 'kb-select kb-ai-model-select',
+                value: current.reasoningEffort || '',
+                disabled: props.busy,
+                title: '思考档位：越高越准也越慢、越贵；这类一次性任务通常「低」就够',
+                onChange: event => props.onChange({ value: fixedKey, effort: event.target.value }),
+              },
+              [
+                h('option', { key: '__default__', value: '' }, '档位：默认'),
+                ...efforts.map(effort =>
+                  h('option', { key: effort.id, value: effort.id }, effort.name || effort.id),
+                ),
+              ],
+            )
+          : null,
+      )
+    }
+
+    /**
+     * 等待提示：思考型模型一次校验要几十秒到两分钟。
+     *
+     * 不说清楚的话，用户干等着会以为界面卡死了 —— 2026-10-23 用户反馈
+     * 「会卡很久，我不知道是不是有什么问题」。这里把已等待秒数摆出来。
+     */
+    function WaitNote(props) {
+      const busy = props.busy
+      const [sec, setSec] = useState(0)
+      useEffect(() => {
+        if (!busy) {
+          setSec(0)
+          return undefined
+        }
+        const t0 = Date.now()
+        const timer = setInterval(() => setSec(Math.floor((Date.now() - t0) / 1000)), 1000)
+        return () => clearInterval(timer)
+      }, [busy])
+      if (!busy) return null
+      return h(
+        'span',
+        { className: 'kb-wait-note', title: translate('workWaitedShort') },
+        translate('workWaiting') + sec + translate('workWaitingSec'),
       )
     }
 
@@ -2220,6 +2486,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                   busy ? translate('workRunning') : translate('verifyAiBtn'),
                 )
               : null,
+            h(WaitNote, { busy }),
           ),
           // 复用缓存结果时给一句提示 + 一个能强制重跑的入口
           review && cached
@@ -2538,6 +2805,15 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             { className: 'kb-vbtn', disabled: busy, onClick: () => runReview(true) },
             busy ? translate('workRunning') : review ? translate('workRunAgain') : translate('workRun'),
           ),
+          h(WaitNote, { busy }),
+          // 这次模型想了多少字、跑了多久：把「为什么慢」摊开给用户看
+          review && review.reasoningChars
+            ? h(
+                'span',
+                { className: 'kb-token-note', title: translate('workWaitedShort') },
+                translate('workThinking') + review.reasoningChars + ' 字 · ' + Math.round((review.elapsedMs || 0) / 1000) + 's',
+              )
+            : null,
           // 复用上次结果时必须说一声，否则用户会以为又调了一次模型
           review && cached ? h('span', { className: 'kb-cache-note' }, translate('workCachedNote')) : null,
           h('button', { className: 'kb-vbtn', onClick: onClose }, translate('close')),
@@ -3162,7 +3438,11 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     exports.reviewCacheSet = reviewCacheSet
     exports.reviewCacheClear = reviewCacheClear
     exports.addTokenUsage = addTokenUsage
-    exports.clearCardVersionCache = () => cardVersionCache.clear()
+    exports.clearCardVersionCache = () => {
+      cardVersionCache.clear()
+      versionBatches.clear()
+    }
+    exports.fetchCardVersions = fetchCardVersions
     exports.readTokenTotal = readTokenTotal
     exports.formatTokens = formatTokens
     }

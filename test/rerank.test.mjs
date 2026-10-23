@@ -9,6 +9,8 @@ import assert from 'node:assert/strict'
 import {
   MAX_RELATED,
   RERANK_CANDIDATES,
+  RERANK_MAX_TOKENS,
+  RERANK_RETRY_MAX_TOKENS,
   applyRerankText,
   buildRerankPrompt,
   fallbackSplit,
@@ -248,6 +250,78 @@ await check('DSH_KB_RERANK=0 时直接本地排序，一次模型都不调', asy
     if (previous === undefined) delete process.env.DSH_KB_RERANK
     else process.env.DSH_KB_RERANK = previous
   }
+})
+
+await check('正文为空（只有思考）→ 加倍预算重试一次，用重试的结果', async () => {
+  const budgets = []
+  const out = await rerankHits({
+    ctx: {},
+    query: 'q',
+    hits: HITS,
+    limits: { limit: 2 },
+    call: async (ctx, input) => {
+      budgets.push(input.maxTokens)
+      if (budgets.length === 1) return { ok: false, text: '', noText: true, reason: '只有思考没有正文' }
+      return { ok: true, text: '{"match":["a"],"related":["c"],"drop":[]}', model: 'fake' }
+    },
+  })
+  assert.deepEqual(budgets, [RERANK_MAX_TOKENS, RERANK_RETRY_MAX_TOKENS], '重试应该加倍预算')
+  assert.equal(out.used, true, '重试成功后要用模型结果，不能退回本地排序')
+  assert.deepEqual(out.matched.map(item => item.id), ['a'])
+})
+
+await check('重试也失败 → 退回本地排序，不抛错', async () => {
+  let calls = 0
+  const out = await rerankHits({
+    ctx: {},
+    query: 'q',
+    hits: HITS,
+    limits: { limit: 2 },
+    call: async () => {
+      calls++
+      return { ok: false, text: '', noText: true, reason: '还是没有正文' }
+    },
+  })
+  assert.equal(calls, 2, '最多重试一次')
+  assert.equal(out.used, false)
+  assert.equal(out.matched.length, 2, '卡片照常出')
+})
+
+await check('正常返回时不会多调一次模型', async () => {
+  let calls = 0
+  await rerankHits({
+    ctx: {},
+    query: 'q',
+    hits: HITS,
+    limits: { limit: 2 },
+    call: async () => {
+      calls++
+      return { ok: true, text: '{"match":["a"]}', model: 'fake' }
+    },
+  })
+  assert.equal(calls, 1)
+})
+
+await check('重试那次的用量也记进总账（两次调用都花了钱）', async () => {
+  const out = await rerankHits({
+    ctx: {},
+    query: 'q',
+    hits: HITS,
+    limits: { limit: 2 },
+    call: async (ctx, input) => {
+      if (input.maxTokens === RERANK_MAX_TOKENS) {
+        return { ok: false, text: '', noText: true, reason: '空', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }
+      }
+      return { ok: true, text: '{"match":["a"]}', model: 'fake', usage: { inputTokens: 10, outputTokens: 7, totalTokens: 17 } }
+    },
+  })
+  assert.equal(out.usage.inputTokens, 20, '两次调用的输入 token 要加起来')
+  assert.equal(out.usage.outputTokens, 12, '两次调用的输出 token 要加起来')
+})
+
+await check('输出预算别再是 2000：思考型模型需要更多空间', () => {
+  assert.ok(RERANK_MAX_TOKENS >= 3000, '首次预算至少 3000')
+  assert.ok(RERANK_RETRY_MAX_TOKENS > RERANK_MAX_TOKENS, '重试预算要比首次大')
 })
 
 // 这两条走真实的 callModel（不注入 call），验证 rerank.js 与 llm.js 之间的接缝：

@@ -13,7 +13,7 @@
 //   - 任何失败（没配模型 / 超时 / 返回不是合法 JSON / id 对不上）都**退回本地排序**，
 //     把候选当成全部命中。宁可卡片多几张，也不能因为重排挂了就没有卡片。
 
-import { callModel } from './llm.js'
+import { callModel, mergeUsage } from './llm.js'
 
 /** 送进模型的候选上限：再多就不划算了，本地排名已经够靠前。 */
 export const RERANK_CANDIDATES = 8
@@ -33,6 +33,27 @@ export const RERANK_TIMEOUT_MS = 35_000
 
 /** 提示词里的输出格式约定，解析和提示词共用一份，避免两边写漂。 */
 export const RERANK_KEYS = ['match', 'related', 'drop']
+
+/**
+ * 重排的输出预算。
+ *
+ * 2026-10-23 审计 P1-4：原来只给 2000。思考型模型（MiniMax-M3 这类）会把
+ * 输出预算先花在思考上，2000 经常不够写正文 —— 表现是「模型没有返回内容」，
+ * 于是重排整个失效、悄悄退回本地排序，用户只感觉到"搜得不准"。
+ * 现在首次给 3000；万一还是空（见下面的重试），加到 6000 再试一次。
+ */
+export const RERANK_MAX_TOKENS = 3000
+export const RERANK_RETRY_MAX_TOKENS = 6000
+
+/**
+ * 思考型模型把预算吃光时的补救指令（和主校验那条一个思路）：
+ * 明确要求别输出思考过程，只给最终结果。
+ */
+const NO_THINK_RULE = [
+  '',
+  '重要：不要输出思考过程，不要解释，直接给最终结果。',
+  '先在内部想清楚，然后只输出最终答案本身。',
+].join('\n')
 
 const SYSTEM_PROMPT = [
   '你是知识库检索的相关性判定器。',
@@ -237,22 +258,43 @@ export async function rerankHits(input) {
   }
 
   const candidates = list.slice(0, RERANK_CANDIDATES)
+  const prompt = buildRerankPrompt(query, candidates)
   let result
   try {
     result = await call(ctx, {
       system: SYSTEM_PROMPT,
-      prompt: buildRerankPrompt(query, candidates),
-      // 思考型模型会把输出预算花在思考上，400 太紧，正文会空（2026-10-23 实测）
-      maxTokens: 2000,
+      prompt,
+      maxTokens: RERANK_MAX_TOKENS,
       timeoutMs: RERANK_TIMEOUT_MS,
     })
   } catch (error) {
     return fallbackSplit(candidates, limits.limit, '重排调用异常：' + (error && error.message ? error.message : String(error)))
   }
+
+  // 正文为空（多半是思考把输出预算吃光了）→ 加倍预算、明确别思考，再试一次。
+  // 和「AI 校验补充」用的是同一套补救（审计 P1-4）：宁可多花一次调用，
+  // 也不要因为思考型模型预算不够就悄悄退回到本地排序。
+  let usage = result && result.usage ? result.usage : null
+  if (result && !result.ok && result.noText) {
+    try {
+      const retry = await call(ctx, {
+        system: SYSTEM_PROMPT + NO_THINK_RULE,
+        prompt,
+        maxTokens: RERANK_RETRY_MAX_TOKENS,
+        timeoutMs: RERANK_TIMEOUT_MS,
+      })
+      // 两次调用都花了钱，用量要合并
+      usage = mergeUsage(usage, retry ? retry.usage : null)
+      if (retry && retry.ok) result = retry
+    } catch {
+      // 重试也炸了：保留第一次的失败原因，照样退回本地排序
+    }
+  }
+
   if (!result || !result.ok) {
     return fallbackSplit(candidates, limits.limit, (result && result.reason) || '模型不可用')
   }
   const split = applyRerankText(result.text, candidates, limits)
   // 用量一起带出去：检索重排也是一次真实的模型调用，得让用户看得见花了多少
-  return { ...split, model: result.model || '', usage: result.usage || null }
+  return { ...split, model: result.model || '', usage }
 }

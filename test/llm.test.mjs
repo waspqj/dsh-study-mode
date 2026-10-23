@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict'
 
-import { callModel, resolveLlm, resolveSelection, normalizeUsage, mergeUsage } from '../plugin/llm.js'
+import { callModel, resolveLlm, resolveSelection, setModelPreference, normalizeUsage, mergeUsage } from '../plugin/llm.js'
 
 let passed = 0
 async function check(label, fn) {
@@ -82,6 +82,53 @@ await check('服务抛错也不炸，回落兜底', () => {
 await check('选择不完整（缺 model）→ 回落兜底', () => {
   assert.equal(resolveSelection(makeCtx(selectionOf({ provider: 'p' }))).source, 'default')
   assert.equal(resolveSelection(makeCtx({ agentDefaultModel: {} })).source, 'default')
+})
+
+// 插件自己的模型设置（2026-10-23 用户要求「模型要能切换」）：
+// 为了绕开「某个模型一次校验要 100 秒」而切会话模型时，不该把主对话的模型也换掉。
+console.log('插件固定模型')
+await check('插件固定了模型 → 优先用它，来源标成 plugin', () => {
+  setModelPreference(() => ({ mode: 'fixed', provider: 'p2', model: 'm2', reasoningEffort: 'low' }))
+  try {
+    const selection = resolveSelection(
+      makeCtx(selectionOf({ provider: 'p1', model: 'm1', reasoningEffort: 'high' })),
+    )
+    assert.equal(selection.source, 'plugin', '固定模型必须优先于会话模型')
+    assert.equal(selection.provider, 'p2')
+    assert.equal(selection.model, 'm2')
+    assert.equal(selection.reasoningEffort, 'low')
+  } finally {
+    setModelPreference(null)
+  }
+})
+
+await check('设置里没固定（mode=session）→ 仍然跟会话走', () => {
+  setModelPreference(() => ({ mode: 'session' }))
+  try {
+    const selection = resolveSelection(makeCtx(selectionOf({ provider: 'p1', model: 'm1' })))
+    assert.equal(selection.source, 'session')
+    assert.equal(selection.model, 'm1')
+  } finally {
+    setModelPreference(null)
+  }
+})
+
+await check('固定模型失败也不偷偷换成别的模型', async () => {
+  setModelPreference(() => ({ mode: 'fixed', provider: 'p2', model: 'm2' }))
+  try {
+    const llm = makeLlm([{ throw: '挂了' }])
+    const ctx = makeCtx({
+      ...selectionOf({ provider: 'p1', model: 'm1' }),
+      llm,
+    })
+    const result = await callModel(ctx, { system: 's', prompt: 'p' })
+    assert.equal(result.ok, false)
+    assert.equal(llm.seen.length, 1, '固定模型只试一次，不许回落')
+    assert.equal(llm.seen[0].provider, 'p2')
+    assert.equal(llm.seen[0].model, 'm2')
+  } finally {
+    setModelPreference(null)
+  }
 })
 
 console.log('调用')

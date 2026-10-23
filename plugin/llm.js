@@ -48,16 +48,52 @@ export function resolveLlm(ctx) {
 }
 
 /**
+ * 插件自己的模型偏好：校验 / 追问 / 检索重排用哪个模型。
+ *
+ * 由 plugin/index.js 在装配时注入一个读取函数（读 store 里的 aiModel 设置）。
+ * 返回 `{mode:'session'}` 或 null = 跟随当前会话（2026-10-22 用户定的规则）；
+ * 返回 `{mode:'fixed', provider, model, reasoningEffort}` = 固定用这个。
+ *
+ * 为什么需要：为了绕开「某个模型一次校验要 100 秒」而切会话模型时，
+ * 会把主对话的模型一起换掉 —— 有了这个设置就能只换插件这几条一次性调用。
+ */
+let modelPreference = () => null
+
+/**
+ * 注入模型偏好读取函数（插件装配时调一次）。
+ * @param {() => (object|null)} read 每次调用都重新读，改了设置立刻生效
+ */
+export function setModelPreference(read) {
+  modelPreference = typeof read === 'function' ? read : () => null
+}
+
+/**
  * 解析这次调用该用哪个模型。
  *
  * 优先顺序：
- *   1. 宿主 `agentDefaultModel.currentSelection()` —— 用户在界面上选的那个；
- *   2. 环境变量 / 内置兜底。
+ *   1. 插件自己固定的模型（`source: 'plugin'`）—— 用户明确指定了就用它，绝不偷偷换；
+ *   2. 宿主 `agentDefaultModel.currentSelection()` —— 用户在界面上选的那个（`source: 'session'`）；
+ *   3. 环境变量 / 内置兜底（`source: 'default'`）。
  *
  * @param {object} ctx 插件上下文
- * @returns {{provider: string, model: string, reasoningEffort: (string|null), source: ('session'|'default')}}
+ * @returns {{provider: string, model: string, reasoningEffort: (string|null), source: ('plugin'|'session'|'default')}}
  */
 export function resolveSelection(ctx) {
+  // ① 插件固定了模型
+  try {
+    const pref = modelPreference()
+    if (pref && pref.mode === 'fixed' && pref.provider && pref.model) {
+      return {
+        provider: String(pref.provider),
+        model: String(pref.model),
+        reasoningEffort: pref.reasoningEffort ? String(pref.reasoningEffort) : null,
+        source: 'plugin',
+      }
+    }
+  } catch {
+    // 设置读不出来就当没设，继续走会话
+  }
+  // ② 跟会话走
   try {
     const service = ctx && typeof ctx.get === 'function' ? ctx.get('agentDefaultModel') : null
     const current = service && typeof service.currentSelection === 'function' ? service.currentSelection() : null
@@ -88,13 +124,16 @@ export function resolveSelection(ctx) {
  * 各家网关字段名不完全统一，这里几种写法都认。
  *
  * @param {any} raw
- * @returns {{inputTokens: number, outputTokens: number, totalTokens: number}|null}
+ * @returns {{inputTokens: number, outputTokens: number, totalTokens: number, reasoningTokens: number}|null}
  */
 export function normalizeUsage(raw) {
   if (!raw || typeof raw !== 'object') return null
   const input = Number(raw.inputTokens ?? raw.input ?? raw.promptTokens ?? 0)
   const output = Number(raw.outputTokens ?? raw.output ?? raw.completionTokens ?? 0)
   const given = Number(raw.totalTokens ?? raw.total ?? NaN)
+  // 思考 token：宿主的 TokenUsage 本来就带 reasoningTokens，以前被丢了 ——
+  // 而它正是「一次校验为什么记了 4862 个输出、正文却只有 600」的答案。
+  const reasoning = Number(raw.reasoningTokens ?? raw.reasoning ?? 0)
   const sum = (Number.isFinite(input) ? input : 0) + (Number.isFinite(output) ? output : 0)
   const total = Number.isFinite(given) && given > 0 ? given : sum
   if (!Number.isFinite(total) || total <= 0) return null
@@ -102,6 +141,7 @@ export function normalizeUsage(raw) {
     inputTokens: Number.isFinite(input) ? Math.max(0, Math.round(input)) : 0,
     outputTokens: Number.isFinite(output) ? Math.max(0, Math.round(output)) : 0,
     totalTokens: Math.max(1, Math.round(total)),
+    reasoningTokens: Number.isFinite(reasoning) ? Math.max(0, Math.round(reasoning)) : 0,
   }
 }
 
@@ -115,6 +155,7 @@ export function mergeUsage(a, b) {
     inputTokens: left.inputTokens + right.inputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
     totalTokens: left.totalTokens + right.totalTokens,
+    reasoningTokens: (left.reasoningTokens || 0) + (right.reasoningTokens || 0),
   }
 }
 
@@ -200,11 +241,14 @@ export async function callModel(ctx, input) {
   const provider = String(input.provider || selection.provider)
   // 用户选定的模型**不偷偷换**：它失败就如实报错，让用户自己决定要不要换。
   // 只有走兜底线路时才尝试备选模型（那条线路本来就是我们自己猜的）。
+  // 用户明确指定过的模型（会话选的 / 插件固定的）**绝不偷偷换**：
+  // 它失败就如实报错，让用户自己决定要不要换。只有走兜底线路时才试备选
+  // （那条线路本来就是我们自己猜的）。
+  // 'plugin' 是插件自己固定模型的情况，同样只认这一个 —— 否则用户特意为了
+  // 「让校验快一点」选定的模型会被悄悄换成别的，那就白设了。
   const primary = String(input.model || selection.model)
-  const models =
-    input.model || selection.source === 'session'
-      ? [primary]
-      : [primary, ...FALLBACK_MODELS.filter(model => model !== primary)]
+  const pinned = Boolean(input.model) || selection.source === 'session' || selection.source === 'plugin'
+  const models = pinned ? [primary] : [primary, ...FALLBACK_MODELS.filter(model => model !== primary)]
   const reasoningEffort = input.reasoningEffort || selection.reasoningEffort
   let lastReason = ''
   let lastNoText = false
@@ -252,3 +296,4 @@ export async function callModel(ctx, input) {
 
   return { ok: false, text: '', provider, model: primary, reason: lastReason || '模型调用失败', noText: lastNoText }
 }
+

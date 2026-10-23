@@ -9,7 +9,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createStore, normalizeSource, normalizeTitle, slugify } from '../plugin/store.js'
-import { jaccard, rankDocs, tokenize, tokenSet } from '../plugin/rank.js'
+import { jaccard, rankDocs, tokenize, tokenSet, createRanker } from '../plugin/rank.js'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-test-'))
 const store = createStore(root)
@@ -252,6 +252,147 @@ check('外部改动会被下次读取看到（合并而非覆盖）', () => {
   fs.appendFileSync(file, JSON.stringify({ id: 'x', title: '外部写入', body: '别的会话写的' }) + '\n')
   const entries = store.readEntries('mysql-进阶')
   assert.ok(entries.some(entry => entry.title === '外部写入'))
+})
+
+// 原子写（审计 P0-1）：写到一半失败不能毁掉旧文件，也不能留 .tmp 残渣
+check('原子写：正常写完不留 .tmp 残留', () => {
+  const slug = '原子写'
+  store.planSave({ topic: slug, sessionId: 's-atomic', dryRun: false, cards: [{ title: '卡片A', body: '正文A' }] })
+  const leftovers = fs.readdirSync(path.join(root, 'topics', slug)).filter(name => name.endsWith('.tmp'))
+  assert.deepEqual(leftovers, [])
+  assert.ok(store.readEntries(slug).some(entry => entry.title === '卡片A'))
+})
+check('原子写：写到一半失败，旧文件完好且清掉 .tmp', () => {
+  const slug = '原子写'
+  const file = path.join(root, 'topics', slug, 'kb.jsonl')
+  const before = fs.readFileSync(file, 'utf8')
+  const realWriteFileSync = fs.writeFileSync
+  // store 的原子写走 fs.writeFileSync(fd, ...)，只在这条路径上炸
+  fs.writeFileSync = (target, ...rest) => {
+    if (typeof target === 'number') throw new Error('模拟磁盘写满')
+    return realWriteFileSync(target, ...rest)
+  }
+  try {
+    assert.throws(
+      () =>
+        store.planSave({
+          topic: slug,
+          sessionId: 's-atomic',
+          dryRun: false,
+          cards: [{ title: '卡片B', body: '正文B' }],
+        }),
+      /模拟磁盘写满/,
+    )
+  } finally {
+    fs.writeFileSync = realWriteFileSync
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), before, '旧文件必须一字不差')
+  const leftovers = fs.readdirSync(path.join(root, 'topics', slug)).filter(name => name.endsWith('.tmp'))
+  assert.deepEqual(leftovers, [], '失败的临时文件必须清掉')
+})
+
+// 跨天备份轮转（审计 P0-2）
+check('跨天写入会先留一份日快照', () => {
+  const slug = '备份测试'
+  store.planSave({ topic: slug, sessionId: 's-bak', dryRun: false, cards: [{ title: '昨天的卡片', body: '昨天写的' }] })
+  const file = path.join(root, 'topics', slug, 'kb.jsonl')
+  // 把文件时间改成昨天，模拟「跨天了才又动这个主题」
+  const yesterday = new Date(Date.now() - 24 * 3600 * 1000)
+  fs.utimesSync(file, yesterday, yesterday)
+  const before = fs.readFileSync(file, 'utf8')
+  store.planSave({ topic: slug, sessionId: 's-bak', dryRun: false, cards: [{ title: '今天的卡片', body: '今天写的' }] })
+  const day = new Date()
+  const key =
+    day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') + '-' + String(day.getDate()).padStart(2, '0')
+  const snapshot = path.join(root, 'backups', slug, `kb-${key}.jsonl`)
+  assert.ok(fs.existsSync(snapshot), '应该有当天的日快照')
+  assert.equal(fs.readFileSync(snapshot, 'utf8'), before, '快照内容 = 跨天前那一刻的内容')
+})
+check('同一天内反复写不重复备份', () => {
+  const slug = '备份测试'
+  const dir = path.join(root, 'backups', slug)
+  const before = fs.readdirSync(dir).filter(name => /^kb-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)).length
+  store.planSave({ topic: slug, sessionId: 's-bak', dryRun: false, cards: [{ title: '又一张', body: '还是今天' }] })
+  const after = fs.readdirSync(dir).filter(name => /^kb-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)).length
+  assert.equal(after, before, '同一天不该再堆一份快照')
+})
+check('日快照最多留 7 份', () => {
+  const slug = '备份测试'
+  const dir = path.join(root, 'backups', slug)
+  // 造 9 天的历史快照，触发一次轮转
+  for (let i = 1; i <= 9; i++) {
+    const day = `2026-0${i < 10 ? '1' : '2'}-${String(i).padStart(2, '0')}`
+    fs.writeFileSync(path.join(dir, `kb-${day}.jsonl`), 'x\n')
+  }
+  const file = path.join(root, 'topics', slug, 'kb.jsonl')
+  const yesterday = new Date(Date.now() - 24 * 3600 * 1000)
+  fs.utimesSync(file, yesterday, yesterday)
+  const today = new Date()
+  const key =
+    today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0')
+  fs.writeFileSync(path.join(dir, `kb-${key}.jsonl`), 'x\n')
+  // 再写一次，触发轮转
+  store.planSave({ topic: slug, sessionId: 's-bak', dryRun: false, cards: [{ title: '触发轮转', body: '写一下' }] })
+  const count = fs.readdirSync(dir).filter(name => /^kb-\d{4}-\d{2}-\d{2}\.jsonl$/.test(name)).length
+  assert.equal(count, 7, '轮转后只应剩 7 份')
+})
+
+// 共享检索器（审计 P1-3）：建一次、反复用，结果必须和一次性检索完全一致
+check('createRanker 与 rankDocs 结果完全一致', () => {
+  const docs = [
+    { id: 'a', title: 'InnoDB 事务隔离级别', body: '读已提交 重复读 幻读 可重复读', tags: ['mysql'], q: '隔离级别有哪几种' },
+    { id: 'b', title: 'redo log 循环写', body: '物理日志 循环使用 满了就覆盖', tags: ['mysql'], q: 'redo log 是什么' },
+    { id: 'c', title: 'MVCC 可见性判断', body: 'ReadView 判断版本可见性', tags: ['mysql'], q: 'MVCC 怎么工作' },
+  ]
+  const ranker = createRanker(docs)
+  for (const query of ['事务隔离级别', 'redo log 是什么', 'MVCC 可见性', '完全对不上的问题']) {
+    const a = rankDocs(docs, query, 3).map(h => `${h.id}:${h.score}`).join('|')
+    const b = ranker.search(query, 3).map(h => `${h.id}:${h.score}`).join('|')
+    assert.equal(b, a, `查询「${query}」结果不一致`)
+  }
+})
+check('createRanker 反复检索互不影响', () => {
+  const docs = [
+    { id: 'a', title: '间隙锁', body: '范围锁 防止幻读', tags: [] },
+    { id: 'b', title: '临键锁', body: '记录锁 + 间隙锁', tags: [] },
+  ]
+  const ranker = createRanker(docs)
+  const first = ranker.search('间隙锁', 2).map(h => h.id)
+  const second = ranker.search('间隙锁', 2).map(h => h.id)
+  const third = ranker.search('临键锁', 2).map(h => h.id)
+  assert.deepEqual(first, second, '同一查询两次结果要一样')
+  assert.deepEqual(third, ['b'], '换一个查询结果应该跟着变')
+})
+
+// 插件自己的 AI 模型设置（2026-10-23「模型要能切换」）
+console.log('插件 AI 模型设置')
+check('默认跟随会话', () => {
+  const pref = store.getAiModel()
+  assert.equal(pref.mode, 'session')
+  assert.equal(pref.provider, null)
+  assert.equal(pref.model, null)
+})
+check('可固定到某个模型，且落盘（另开 store 也读得到）', () => {
+  const saved = store.setAiModel({
+    mode: 'fixed',
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+    reasoningEffort: 'low',
+  })
+  assert.equal(saved.mode, 'fixed')
+  assert.equal(saved.provider, 'deepseek-official')
+  assert.equal(saved.reasoningEffort, 'low')
+  assert.equal(createStore(root).getAiModel().model, 'deepseek-flash', '必须写进 settings.json')
+})
+check('可改回跟随会话', () => {
+  assert.equal(store.setAiModel({ mode: 'session' }).mode, 'session')
+  assert.equal(store.getAiModel().provider, null)
+  assert.equal(createStore(root).getAiModel().mode, 'session', '改回也要落盘')
+})
+check('fixed 缺 provider/model 要报错，不能存半截设置', () => {
+  assert.throws(() => store.setAiModel({ mode: 'fixed', provider: '', model: 'x' }), /必须同时给出/)
+  assert.throws(() => store.setAiModel({ mode: 'fixed', provider: 'p', model: '  ' }), /必须同时给出/)
+  assert.equal(store.getAiModel().mode, 'session', '报错后不能留下坏设置')
 })
 
 fs.rmSync(root, { recursive: true, force: true })
