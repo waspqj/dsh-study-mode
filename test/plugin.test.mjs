@@ -641,6 +641,64 @@ await check('领域补全只在「问的就是这个领域」时做，具体问�
   )
 })
 
+// ------------------------------------------------- 提议补条目（2026-10-23 用户实测）
+// 「三次握手和四次挥手」那次：库里明明有《TCP三次握手与四次挥手》，
+// 模型却提议补「为什么挥手需要四次」—— 白白多一次往返，还把库污染了。
+console.log('提议补条目：库里已经讲到的不再提议')
+await check('库里相邻条目已经讲了的话题，learn_propose 要拦下来', async () => {
+  const exec3 = { agent: { id: 'sess-cover' } }
+  topics.execute({ action: 'create', name: '覆盖测试' }, exec3)
+  const cards = [
+    {
+      title: 'TCP三次握手与四次挥手',
+      body:
+        '建连三次、断开四次，主动关闭的一方要进 TIME_WAIT。' +
+        String.fromCharCode(10) +
+        '- 四次挥手：主动方发 FIN；被动方回 ACK；被动方发 FIN；主动方回 ACK',
+    },
+  ]
+  await save.execute({ cards }, exec3)
+  await save.execute({ approved: true, cards }, exec3)
+  const propose = registered.get('learn_propose')
+  // 覆盖的：挥手、四次 这两个实词那条卡片都讲了 → 拦
+  const covered = propose.execute(
+    { items: [{ title: '为什么挥手需要四次', why: 'x', body: '正文' }] },
+    exec3,
+  )
+  assert.equal(covered.status, 'already', '被覆盖时不该产生提议')
+  assert.equal(covered.items.length, 0)
+  assert.ok(covered.covered.some(item => item.title === '为什么挥手需要四次'), '要说明被哪条覆盖')
+  assert.equal(covered.covered[0].coveredBy, 'TCP三次握手与四次挥手')
+
+  // 没覆盖的：2MSL 那条卡片里没有 → 放行
+  const ok = propose.execute(
+    { items: [{ title: 'TIME_WAIT 为什么等 2MSL', why: 'y', body: '正文' }] },
+    exec3,
+  )
+  assert.equal(ok.status, 'proposed', '库里真缺的照常提议')
+  assert.equal(ok.items.length, 1)
+})
+
+await check('提议时写的正文会存下来（点同意时直接出卡片，不再调模型）', async () => {
+  const exec3 = { agent: { id: 'sess-body' } }
+  topics.execute({ action: 'create', name: '提议正文测试' }, exec3)
+  const propose = registered.get('learn_propose')
+  const result = propose.execute(
+    {
+      items: [
+        {
+          title: 'TCP 粘包怎么处理',
+          why: '库里没有独立条目',
+          body: '粘包是字节流没有边界造成的。' + String.fromCharCode(10) + '- 加长度字段或分隔符',
+        },
+      ],
+    },
+    exec3,
+  )
+  assert.equal(result.status, 'proposed')
+  assert.match(result.items[0].body, /长度字段/, '正文要跟着提议一起存')
+})
+
 // ------------------------------------------------- persona（预设里的行为规则）
 // 2026-10-23 用户实测反馈的两点，都落在 persona 上：
 //   ① 提议补条目的那行文字太不显眼 → 改用 ask_user_question 结构化提问

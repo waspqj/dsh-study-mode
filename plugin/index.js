@@ -375,20 +375,27 @@ async function handleProposalAccept(body, ctx) {
   const cards = []
   const failures = []
   for (const item of picked) {
-    const written = await writeCardBody(ctx, item, { ...proposal, topicName })
-    if (!written.ok) {
-      // 把模型的失败原因也带上：只说「没能写出正文」用户没法判断是模型挂了还是超时
-      failures.push(
-        item.title +
-          (written.model ? '（' + written.model + '）' : '') +
-          (written.reason ? '：' + written.reason : ''),
-      )
-      continue
+    // 正文优先用**提议时就写好的**那份：点「同意」就秒出预览，不用再调模型。
+    // 2026-10-23 用户实测：原先在这里临时调模型生成，思考型模型把预算吃光只返回思考过程，
+    // 用户等了几分钟没等到就退出了。现在只有老数据（提议里没正文）才退回生成。
+    let body = String(item.body || '').trim()
+    if (!body) {
+      const written = await writeCardBody(ctx, item, { ...proposal, topicName })
+      if (!written.ok) {
+        // 把模型的失败原因也带上：只说「没能写出正文」用户没法判断是模型挂了还是超时
+        failures.push(
+          item.title +
+            (written.model ? '（' + written.model + '）' : '') +
+            (written.reason ? '：' + written.reason : ''),
+        )
+        continue
+      }
+      body = written.body
     }
     cards.push({
       kind: 'point',
       title: item.title,
-      body: written.body,
+      body,
       tags: Array.isArray(item.tags) ? item.tags : [],
       appliesTo: item.appliesTo || null,
       // 正文由插件模型生成 → 来源写清楚，explicitly 未核实

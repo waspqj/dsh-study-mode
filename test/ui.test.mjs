@@ -527,6 +527,42 @@ await check('模型只返回思考过程、没有正文时，要加预算重试�
   assert.match(res.json.cards[0].body, /TIME_WAIT/, '重试后要拿到正文')
 })
 
+await check('正文在提议时就写好 → 点「同意」不再调模型（2026-10-23 实测：等了几分钟没出来）', async () => {
+  let called = 0
+  const countingLlm = {
+    stream() {
+      called++
+      return (async function* () {
+        yield { type: 'text-delta', text: '模型不该被调用' }
+      })()
+    },
+  }
+  const handler = createHandler({
+    getOrigin: () => SELF_ORIGIN,
+    ctx: { get: (name) => (name === 'llm' ? countingLlm : undefined) },
+  })
+  const proposalId = registerProposal({
+    topicArg: '预写正文测试',
+    slug: slugify('预写正文测试'),
+    topicName: '预写正文测试',
+    items: [
+      {
+        title: '为什么挥手需要四次',
+        why: '库里没有独立条目',
+        body:
+          '因为被动方收到 FIN 后还要把自己的数据发完。' +
+          String.fromCharCode(10) +
+          '- 主动方 FIN → 被动方 ACK',
+      },
+    ],
+    sessionId: null,
+  })
+  const res = await postTo(handler, '/propose/accept', { proposalId })
+  assert.equal(res.statusCode, 200, res.body)
+  assert.equal(called, 0, '提议里已经有正文，不该再调模型')
+  assert.match(res.json.cards[0].body, /被动方收到 FIN/, '要用提议时写好的那正文')
+})
+
 await check('只补选中的那几条（用户只想补其中几条）', async () => {
   const topicName = '选几条测试'
   const proposalId = registerProposal({

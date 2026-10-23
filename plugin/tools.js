@@ -337,6 +337,74 @@ function renderSource(source) {
 }
 
 /**
+ * 这个话题是不是已经被库里某条条目的正文讲到了？
+ *
+ * 判据（宁可漏判，不要误判）：把提议标题拆成**实词**（去掉「为什么 / 是什么 / 需要 / 的」这类
+ * 问法词与虚词），如果这些实词**全部**出现在同一条条目的标题或正文里、并且至少有一个实词
+ * 出现在那条的**标题**里 → 说明那块内容库里已经有了，不该再提议补一条。
+ *
+ * 2026-10-23 用户实测：库里有《TCP三次握手与四次挥手》，模型却提议补「为什么挥手需要四次」
+ * —— 挥手、四次这两个实词那条卡片都讲了 → 该拦。同一批里的「TIME_WAIT 为什么等 2MSL」
+ * 则不该拦（2MSL 那条卡片里没有，是真的缺）。
+ *
+ * @param {string} title 提议标题
+ * @param {object[]} entries 候选条目（当前主题的）
+ * @returns {object|null} 覆盖它的那条条目，没有则 null
+ */
+function findCoveringEntry(title, entries) {
+  const words = coverKeywords(title)
+  if (words.length < 2) return null
+  for (const entry of entries || []) {
+    if ((entry.status || 'active') !== 'active') continue
+    const body = String(entry.body || '').toLowerCase()
+    const entryTitle = String(entry.title || '').toLowerCase()
+    const hay = entryTitle + ' ' + body
+    if (!hay.trim()) continue
+    if (!words.every(word => hay.includes(word))) continue
+    if (words.some(word => entryTitle.includes(word))) return entry
+  }
+  return null
+}
+
+/** 问法词、虚词、通用动词：出现在提议标题里不代表内容本身。 */
+const COVER_STOPWORDS = new Set([
+  '为什么', '是什么', '什么', '怎么', '如何', '哪些', '需要', '使用', '用于', '可以', '应该',
+  '的', '了', '吗', '呢', '和', '与', '及', '或', '在', '中', '要', '会', '有', '是', '对', '把',
+  'the', 'a', 'an', 'of', 'to', 'is', 'and', 'or', 'in', 'on', 'for', 'how', 'why', 'what',
+])
+
+/**
+ * 从提议标题里取实词。
+ *
+ * 做法：中文按**停用词切段**（为什么 / 是什么 / 需要 / 的 / 和 / 与 …），
+ * 剩下的每一段就是一个实词（「为什么挥手需要四次」→ 挥手、四次）；
+ * 英文与数字整词保留。不用 2 字滑窗 —— 滑窗会把「手需」「要四」这种碎片也算成词，
+ * 「全部命中」的判据就永远不成立。
+ */
+function coverKeywords(title) {
+  const text = String(title || '').toLowerCase()
+  const words = []
+  for (const match of text.matchAll(/[a-z][a-z0-9_+-]{1,}|\d{2,}/g)) {
+    if (!COVER_STOPWORDS.has(match[0])) words.push(match[0])
+  }
+  // 中文：按停用词切段，剩下的段就是实词
+  const splitter = new RegExp(
+    Array.from(COVER_STOPWORDS)
+      .filter(word => /[一-鿿]/.test(word))
+      .sort((a, b) => b.length - a.length)
+      .map(word => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('|'),
+    'g',
+  )
+  const cjk = text.replace(/[^一-鿿]+/g, ' ')
+  for (const segment of cjk.split(splitter)) {
+    const word = segment.trim()
+    if (word.length >= 2) words.push(word)
+  }
+  return Array.from(new Set(words))
+}
+
+/**
  * 主题画像的文本版：领域分布 + 标签分布。
  *
  * 为什么要有：模型不知道库里有哪些领域值，只能拿一个标签去猜 —— 猜 "C++" 就
@@ -1601,7 +1669,9 @@ export function apply(ctx) {
   ctx.tools.register({
     name: 'learn_propose',
     description:
-      '提议往知识库里补条目。**只给标题和一句话理由，不要写正文** —— 正文在用户点「同意，出卡片预览」后由插件生成，再点「确认写入」才入库。库里已有同名条目的不要提议（工具会查重并告知）。',
+      '提议往知识库里补条目。**要写正文**（卡片格式：首行结论 + 每行一个要点）：' +
+      '正文存在提议里，用户点「同意，出卡片预览」时直接出预览卡片 —— 不用再调一次模型去生成。' +
+      '**库里已经讲过的不要提议**：工具会查重，也会检查这个话题是不是已经被某条相邻条目的正文覆盖了（覆盖了会告诉你，别再提）。',
     parameters: toolSchema(
       {
         topic: { type: 'string', description: '目标主题，缺省用当前绑定的主题' },
@@ -1613,6 +1683,11 @@ export function apply(ctx) {
             properties: {
               title: { type: 'string', description: '条目标题，≤20 字，命名风格与库里一致' },
               why: { type: 'string', description: '一句话理由：为什么值得单独成条' },
+              body: {
+                type: 'string',
+                description:
+                  '卡片正文（≤400 字）：首行结论；之后每行一个要点，行首 "- "；术语 **粗体**，重点 【】，参数用 `反引号`。',
+              },
               appliesTo: { type: 'string', description: '适用范围/领域，如 C++、MySQL 8.0' },
               tags: { type: 'array', items: { type: 'string' }, description: '2-5 个标签' },
             },
@@ -1669,6 +1744,7 @@ export function apply(ctx) {
       const existingEntries = store.readEntries(slug)
       const items = []
       const existing = []
+      const covered = []
       for (const item of raw) {
         const title = String(item?.title || '').trim()
         if (!title) throw new Error('每条提议都必须有 title')
@@ -1678,20 +1754,32 @@ export function apply(ctx) {
           existing.push(hit.title)
           continue
         }
+        // 覆盖检查：这条要补的话题，是不是已经被库里某条相邻条目的正文讲到了？
+        // （2026-10-23 用户实测：问「三次握手和四次挥手」，库里明明有《TCP三次握手与四次挥手》，
+        //  模型却提议补「为什么挥手需要四次」「TIME_WAIT 为什么等 2MSL」——
+        //  这两件事那条卡片的正文里都写了。白白多一次提议往返，还把库污染了。）
+        const cover = findCoveringEntry(title, existingEntries)
+        if (cover) {
+          covered.push({ title, coveredBy: cover.title })
+          continue
+        }
         items.push({
           title,
           why: String(item?.why || '').trim(),
+          // 正文随提议一起存下来：用户点「同意」时直接出预览卡片，
+          // 不用再调一次模型去生成（那次调用又慢又烧 token）。
+          body: String(item?.body || '').trim().slice(0, 2000),
           appliesTo: item?.appliesTo ? String(item.appliesTo).trim() : null,
           tags: Array.isArray(item?.tags) ? item.tags.map(t => String(t).trim()).filter(Boolean).slice(0, 8) : [],
         })
       }
 
       if (!items.length) {
-        return { status: 'already', topic: slug, topicName, existing, items: [] }
+        return { status: 'already', topic: slug, topicName, existing, covered, items: [] }
       }
 
       const proposalId = registerProposal({ topicArg: topicArg || null, slug, topicName, items, sessionId })
-      return { status: 'proposed', proposalId, topic: slug, topicName, items, existing }
+      return { status: 'proposed', proposalId, topic: slug, topicName, items, existing, covered }
     },
     presentCall: args => ({
       card: 'generic',
