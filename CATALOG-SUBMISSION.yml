@@ -1,0 +1,27 @@
+# awesome-dsh-plugin 目录收录投稿文件
+#
+# 用法：把本文件的内容复制到
+#   https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/new/master
+#   新建文件路径：data/plugins/<github用户名>__dsh-study-mode.yml
+# 一个插件一个文件（条目文件永不相撞，所以你的 PR 不会和别人冲突）。
+#
+# 目录规则要点（来自 awesome-dsh-plugin/contributing.md）：
+#   - url 必须**精确**指向你的 GitHub 仓库（目录 7211 条全是 github.com，
+#     CI 用 GitHub API 枚举仓库树，别的托管平台过不了）
+#   - package.json 里要声明 dsh.bundle（已有 ✓），仓库根要有 cordis.patch.yml（已有 ✓）
+#   - 仓库要满 1 天（CI 自动查 GitHub 仓库的 created_at；PR 可以先提，
+#     时间到了 CI 自己重跑就过）
+#   - 仓库要加 dsh-plugin topic
+#   - 只有 description.en 必填；中文写不了可以留空，维护者会补
+#   - 描述只说功能、不带营销词，而且必须属实（会被拿代码核对）
+#   - category 选最贴近的就行，选不准维护者会自己改，不会打回
+#
+# 改完把下面 <GITHUB_USER> 换成你的 GitHub 用户名。
+
+url: https://github.com/<GITHUB_USER>/dsh-study-mode
+name: <GITHUB_USER>/dsh-study-mode
+category: memory
+description:
+  en: 'Study-mode agent preset for DSH with a topic knowledge base: answers quote the retrieved cards and mark anything not found as unverified, the sidebar panel manages topics and cards, every card can be AI-reviewed and verified, and new cards are written as a preview you confirm before they enter the library.'
+  zh: '学习模式 agent 预设 + 主题知识库：回答命中卡片标出处、查不到标未验证；侧边栏面板管理主题与卡片；每张卡片可做 AI 校验补充与核实；新卡片先出预览，确认后才入库。'
+icon: https://raw.githubusercontent.com/<GITHUB_USER>/dsh-study-mode/main/assets/icon-180.png
