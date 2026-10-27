@@ -587,5 +587,108 @@ check('待写入批次也能跨模块实例取回', async () => {
   inst1.dropSaveBatch(batchId)
 })
 
+// ---------------------------------------------------------------- 改名（2026-10-26）
+//
+// 用户要求「主题和知识卡片的名字，都可以在 ui 随意编辑」。
+// 这里锁死三条语义：改名不丢数据、旧名仍然有效、引用不改名。
+console.log('主题改名')
+{
+  const rn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-rename-'))
+  const s = createStore(rn)
+  const slug = s.createTopic('MySQL 进阶', { description: '原说明', keywords: ['innodb'] })
+  s.planSave({ topic: slug, cards: [{ title: '卡片一', body: '正文一' }], dryRun: false })
+
+  check('改名：显示名变了，目录 slug 不变', () => {
+    const result = s.updateTopic(slug, { name: '数据库专题' })
+    assert.equal(result.renamed, true)
+    assert.equal(result.slug, slug, 'slug 是内部 ID，不能变')
+    assert.equal(s.listTopics()[0].name, '数据库专题')
+    assert.equal(fs.existsSync(path.join(rn, 'topics', slug, 'kb.jsonl')), true, '目录没挪走')
+  })
+
+  check('改名：卡片一条都没丢', () => {
+    const entries = s.listEntries({ topic: slug }).entries
+    assert.equal(entries.length, 1)
+    assert.equal(entries[0].title, '卡片一')
+  })
+
+  check('改名：旧名进 aliases，旧名照样查得到', () => {
+    const topic = s.listTopics()[0]
+    assert.deepEqual(topic.aliases, ['MySQL 进阶'])
+    assert.equal(s.findTopic('MySQL 进阶').name, '数据库专题')
+    assert.equal(s.findTopic('数据库专题').name, '数据库专题')
+  })
+
+  check('改名：按新显示名也能列条目（不能只认 slug）', () => {
+    assert.equal(s.listEntries({ topic: '数据库专题' }).entries.length, 1)
+    assert.equal(s.listEntries({ topic: 'MySQL 进阶' }).entries.length, 1, '旧名也要能用')
+  })
+
+  check('改名：传 slug 引用主题时不该把显示名改成 slug', () => {
+    // 真踩过的坑：界面加卡片传的是 item.slug，createTopic 见到
+    // 「目录名 ≠ 显示名」就当成改名，把用户的「MySQL 进阶」改成了「mysql」。
+    const before = s.listTopics()[0].name
+    s.createTopic(slug)
+    assert.equal(s.listTopics()[0].name, before, '引用不是改名')
+  })
+
+  check('改名：按旧名建主题时不该把新名改回去', () => {
+    const before = s.listTopics()[0].name
+    s.createTopic('MySQL 进阶')
+    assert.equal(s.listTopics()[0].name, before, '模型在用旧名字，不能把用户改的名改回去')
+    assert.equal(fs.readdirSync(path.join(rn, 'topics')).length, 1, '不该另开空目录')
+  })
+
+  check('改名：可以改说明/关键词/领域', () => {
+    s.updateTopic(slug, { description: '新说明', keywords: ['锁', '事务'], domain: 'MySQL' })
+    const topic = s.listTopics()[0]
+    assert.equal(topic.description, '新说明')
+    assert.deepEqual(topic.keywords, ['锁', '事务'])
+    assert.equal(topic.domain, 'MySQL')
+  })
+
+  check('改名：传空字符串能清掉说明和领域', () => {
+    s.updateTopic(slug, { description: '', domain: '' })
+    const topic = s.listTopics()[0]
+    assert.equal(topic.description || '', '')
+    assert.equal(topic.domain || '', '')
+  })
+
+  check('改名：名称为空要报错', () => {
+    assert.throws(() => s.updateTopic(slug, { name: '  ' }), /不能为空/)
+  })
+
+  check('改名：不存在的主题要报错', () => {
+    assert.throws(() => s.updateTopic('压根没有这个主题', { name: 'x' }), /不存在/)
+  })
+
+  check('slug 撞车：「C++」不能顶掉已有的「C#」', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-collide-'))
+    const c = createStore(cn)
+    const a = c.createTopic('C#')
+    c.planSave({ topic: a, cards: [{ title: 'C# 卡片', body: 'x' }], dryRun: false })
+    const b = c.createTopic('C++')
+    assert.notEqual(a, b, '两个主题不能共用一个目录')
+    assert.equal(c.listTopics().find(item => item.slug === a).name, 'C#', 'C# 不能被改名顶掉')
+    assert.equal(c.listEntries({ topic: a }).entries.length, 1, 'C# 的卡片得还在')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  check('现场隐患：显示名≠slug 的主题，界面加卡后不能被改名', () => {
+    // 现场真有一个这样的主题：slug 是 c，显示名是「C#」。
+    // 界面加卡片传的是 item.slug —— 老代码会把它当成「改名成 c」，
+    // 显示名就被顶掉了。这个用例锁住修法。
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-slugref-'))
+    const c = createStore(cn)
+    const slug = c.createTopic('C#')
+    assert.notEqual(slug, 'C#', 'slug 确实不等于显示名')
+    c.planSave({ topic: slug, cards: [{ title: '界面加的卡', body: 'x' }], dryRun: false })
+    assert.equal(c.listTopics()[0].name, 'C#', '加卡之后显示名不能变')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  fs.rmSync(rn, { recursive: true, force: true })
+}
+
 fs.rmSync(root, { recursive: true, force: true })
 console.log(`\n${passed} 项断言通过`)

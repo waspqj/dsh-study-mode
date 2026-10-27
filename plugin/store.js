@@ -599,23 +599,123 @@ export function createStore(root) {
     return scored.length ? scored[0].topic : null
   }
 
+  /**
+   * 找一个没被占用的 slug：c → c-2 → c-3 …
+   *
+   * 什么时候用：两个不同的显示名算出了同一个 slug（「C#」和「C++」都是 c）。
+   * 这时后来的那个另起目录，绝不顶掉先来的 —— 顶掉等于把先来的主题改名，
+   * 而那个主题的条目还在，模型却已经找不到了。
+   */
+  function uniqueSlug(base) {
+    if (!fs.existsSync(topicDir(base))) return base
+    for (let n = 2; n < 200; n++) {
+      const candidate = `${base}-${n}`
+      if (!fs.existsSync(topicDir(candidate))) return candidate
+    }
+    return `${base}-${Date.now()}`
+  }
+
+  /**
+   * 定位「这个名字指的是哪个主题」。
+   *
+   * 返回 {slug, via}，via 说明是哪种命中：
+   *   'slug'  —— 输入正好是目录名（界面、脚本传的内部标识）
+   *   'name'  —— 输入是显示名
+   *   'alias' —— 输入是旧名（用户改过名之前叫的那个）
+   *
+   * 为什么只读 topic.json 不走 listTopics：listTopics 会 stat 每个主题的
+   * kb.jsonl，混进写入路径的并发检测里，会让「读后被改过」的判定提前触发。
+   *
+   * 为什么 'slug' 命中时**不能**顺手改名（真踩过的坑）：
+   * 界面加卡片时传的是 item.slug。以前 createTopic 见到「目录名 ≠ 显示名」
+   * 就当成改名，把用户的「MySQL 进阶」改成了「mysql」，原名掉进 aliases。
+   * 现在：引用就是引用，名字只在用户明确改名时才动。
+   */
+  function locateTopic(input) {
+    const raw = String(input ?? '').trim()
+    if (!raw) return null
+    const lower = raw.toLowerCase()
+    // 1. 目录名精确命中
+    if (fs.existsSync(topicDir(raw))) return { slug: raw, via: 'slug' }
+    if (!fs.existsSync(topicsDir)) return null
+    // 2. 显示名 / 旧名
+    for (const item of fs.readdirSync(topicsDir, { withFileTypes: true })) {
+      if (!item.isDirectory()) continue
+      const meta = readMeta(item.name)
+      if (String(meta.name || '').toLowerCase() === lower) return { slug: item.name, via: 'name' }
+      if (
+        (Array.isArray(meta.aliases) ? meta.aliases : []).some(
+          a => String(a || '').toLowerCase() === lower,
+        )
+      ) {
+        return { slug: item.name, via: 'alias' }
+      }
+    }
+    return null
+  }
+
+  /**
+   * 把「用户给的主题」解析成目录 slug。
+   *
+   * 认这三种写法（顺序很重要）：
+   *   1. 正好是某个主题的 slug —— 直接用（这是界面和内部调用传的东西）
+   *   2. 正好是某个主题的显示名或旧名（忽略大小写）—— 用那个主题的 slug
+   *   3. 兜底 slugify(name)
+   *
+   * 为什么必须有第 2 条：改名之后显示名和 slug 不再对应
+   * （「面试」改名成「面试题库」，slug 还是「面试」）。
+   * 只按 slugify 解析的话，用户/模型拿新名字一查就是「找不到」，卡片像丢了。
+   *
+   * 为什么显示名精确匹配要先于 slugify 兜底：否则「C++」（slug 是 c-2）
+   * 会 slugify 成 c，撞到「C#」那个主题上去。
+   */
+  function resolveSlug(input) {
+    const raw = String(input ?? '').trim()
+    if (!raw) return null
+    const found = locateTopic(raw)
+    if (found) return found.slug
+    return slugify(raw)
+  }
+
   /** 新建/更新主题元数据；同名则补别名，不丢已有条目。 */
   function createTopic(name, meta = {}) {
     const display = String(name ?? '').trim()
     if (!display) throw new Error('主题名称不能为空')
     ensureRoot()
-    const slug = slugify(display)
+    // 解析「这个名字指的是哪个主题」：
+    //   'slug'  —— 引用已有主题（界面加卡片时传的就是 slug）：不动名字
+    //   'name'  —— 就是它，名字一样：不用改
+    //   'alias' —— 旧名：用户已亲手改过名，**不改回去**
+    // 都不匹配 → 全新主题；slug 撞了别的目录就另起一个（c → c-2）。
+    const found = locateTopic(display)
+    let slug
+    if (found) {
+      slug = found.slug
+    } else {
+      // 没按名字/别名/目录名命中 —— 那多半是个新主题。
+      // 但它的 slug 可能被**另一个名字**的主题占着（「C#」和「C++」的 slug 都是 c）。
+      // 这种撞车绝不能顶掉先来的那个：顶掉等于把别人的主题改名，
+      // 而那个主题的卡片还在，模型却已经找不到了。
+      const candidate = slugify(display)
+      const occupant = readMeta(candidate)
+      slug = occupant.name ? uniqueSlug(candidate) : candidate
+    }
     const existing = readMeta(slug)
-    const description = meta.description ? String(meta.description).trim() : existing.description || ''
+    const isNewTopic = !existing.name
+    // 撞车时新主题的元数据只能来自 meta 参数：不能继承被撞那个主题的说明/关键词
+    const baseMeta = isNewTopic ? {} : existing
+    const description = meta.description ? String(meta.description).trim() : baseMeta.description || ''
     const keywords = Array.isArray(meta.keywords)
       ? meta.keywords.map(k => String(k).trim()).filter(Boolean).slice(0, 12)
-      : existing.keywords || []
+      : baseMeta.keywords || []
     // 主题级领域：不填就沿用已有的；传空字符串表示清除
     const domain =
-      meta.domain === undefined ? existing.domain || '' : String(meta.domain || '').trim()
+      meta.domain === undefined ? baseMeta.domain || '' : String(meta.domain || '').trim()
 
-    if (existing.name) {
-      if (existing.name !== display) {
+    if (!isNewTopic) {
+      // 只有「明确要改成另一个显示名」才动 name。
+      // 引用（slug）和旧名（alias）都不动 —— 动就是在改用户起的名字。
+      if (found?.via === 'name' && existing.name !== display) {
         existing.aliases = Array.from(new Set([...(existing.aliases || []), existing.name]))
         existing.name = display
       }
@@ -628,7 +728,7 @@ export function createStore(root) {
     } else {
       writeMeta(slug, {
         name: display,
-        slug,
+        slug: slug,
         description,
         keywords,
         ...(domain ? { domain } : {}),
@@ -639,6 +739,70 @@ export function createStore(root) {
       if (!fs.existsSync(topicFile(slug))) writeEntries(slug, [])
     }
     return slug
+  }
+
+  /**
+   * 改主题的显示信息：改名 / 改说明 / 改关键词 / 改领域。
+   *
+   * 关键设计：**只改显示名，不改目录 slug**。
+   *
+   * 为什么：slug 变了，主题目录下每一条 entry 的 topic 字段都得跟着改，
+   * 还要改会话绑定、改默认主题 —— 一次改名动几百条数据，出错就是「卡片全丢」。
+   * 所以 slug 当成不可变的内部 ID，显示名才是给人看的，随便改。
+   * 旧名进 aliases，模型按旧名找主题照样找得到（用户改名前的对话不会失效）。
+   *
+   * @param {string} slug 主题目录名
+   * @param {{name?: string, description?: string, keywords?: string[], domain?: string}} patch
+   * @returns {{slug: string, name: string, renamed: boolean}} 新主题信息
+   */
+  function updateTopic(slug, patch = {}) {
+    const key = String(slug ?? '').trim()
+    if (!key) throw new Error('缺少主题标识')
+    ensureRoot()
+    if (!fs.existsSync(topicDir(key))) throw new Error(`主题「${key}」不存在`)
+    const meta = readMeta(key)
+    const before = meta.name || key
+
+    const next = { ...meta, slug: key }
+    let renamed = false
+
+    if (patch.name !== undefined) {
+      const display = String(patch.name ?? '').trim()
+      if (!display) throw new Error('主题名称不能为空')
+      if (display !== before) {
+        // 旧名留进别名：模型、脚本、用户以前的对话里都还叫那个名字
+        const aliases = new Set([...(meta.aliases || []), before])
+        aliases.delete(display)
+        next.aliases = Array.from(aliases).slice(-12)
+        next.name = display
+        renamed = true
+      } else {
+        next.name = before
+      }
+    }
+
+    if (patch.description !== undefined) {
+      const description = String(patch.description ?? '').trim()
+      if (description) next.description = description
+      else delete next.description
+    }
+    if (patch.keywords !== undefined) {
+      const keywords = (Array.isArray(patch.keywords) ? patch.keywords : [])
+        .map(k => String(k).trim())
+        .filter(Boolean)
+        .slice(0, 12)
+      if (keywords.length) next.keywords = keywords
+      else delete next.keywords
+    }
+    if (patch.domain !== undefined) {
+      const domain = String(patch.domain ?? '').trim()
+      if (domain) next.domain = domain
+      else delete next.domain
+    }
+
+    next.updatedAt = now()
+    writeMeta(key, next)
+    return { slug: key, name: next.name || key, renamed }
   }
 
   function readBindings() {
@@ -973,7 +1137,7 @@ export function createStore(root) {
     // dryRun 不创建主题，保持「只预览、不动盘」的语义
     let slug
     if (topic) {
-      slug = dryRun ? (findTopic(topic)?.slug ?? slugify(topic)) : createTopic(topic)
+      slug = dryRun ? (findTopic(topic)?.slug ?? resolveSlug(topic)) : createTopic(topic)
     } else {
       slug = currentTopic(sessionId)
     }
@@ -1100,7 +1264,7 @@ export function createStore(root) {
 
   /** 更新既有条目（按 id）。bumpVersion=false 时不升版本（核实状态走这条路）。 */
   function updateEntry({ id, topic, sessionId, fields, bumpVersion = true }) {
-    const slug = topic ? slugify(topic) : currentTopic(sessionId)
+    const slug = topic ? resolveSlug(topic) : currentTopic(sessionId)
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
       const observed = statFile(topicFile(candidate))
@@ -1109,7 +1273,10 @@ export function createStore(root) {
       if (!entry) continue
       assertUnchanged(candidate, observed)
       if (fields.title !== undefined) {
-        entry.title = String(fields.title).trim()
+        // 空标题要挡住：卡片没名字，在列表里认不出来，检索也命中不了。
+        const title = String(fields.title).trim()
+        if (!title) throw new Error('标题不能为空')
+        entry.title = title
         entry.normTitle = normalizeTitle(entry.title)
       }
       if (fields.body !== undefined) entry.body = String(fields.body).trim()
@@ -1140,7 +1307,7 @@ export function createStore(root) {
    * @returns {{topic: string, entry: object}} 找不到就抛错
    */
   function locateEntry({ id, topic }) {
-    const slug = topic ? slugify(topic) : null
+    const slug = topic ? resolveSlug(topic) : null
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
       const entries = readEntries(candidate)
@@ -1162,7 +1329,7 @@ export function createStore(root) {
    * @param {{id: string, topic?: string, body: string, expectedVersion?: number}} options
    */
   function applyCardBody({ id, topic, body, expectedVersion, model }) {
-    const slug = topic ? slugify(topic) : null
+    const slug = topic ? resolveSlug(topic) : null
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
       const observed = statFile(topicFile(candidate))
@@ -1221,7 +1388,7 @@ export function createStore(root) {
    * 用原版的写入时间换算，保证版本号规则统一。
    */
   function rollbackCard({ id, topic }) {
-    const slug = topic ? slugify(topic) : null
+    const slug = topic ? resolveSlug(topic) : null
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
       const observed = statFile(topicFile(candidate))
@@ -1277,7 +1444,7 @@ export function createStore(root) {
   function setVerifyMany({ ids, topic, state, by, note }) {
     const wanted = Array.isArray(ids) ? ids.map(id => String(id)).filter(Boolean) : []
     if (!wanted.length) throw new Error('没有要核实的条目')
-    const slug = topic ? slugify(topic) : null
+    const slug = topic ? resolveSlug(topic) : null
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     const verified = state === 'unverified' ? false : true
     const stamp = now()
@@ -1315,7 +1482,7 @@ export function createStore(root) {
    * 写入时同步维护老的 verified 布尔，老工具和老代码不受影响。
    */
   function setVerify({ id, topic, state, by, note }) {
-    const slug = topic ? slugify(topic) : null
+    const slug = topic ? resolveSlug(topic) : null
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
       const observed = statFile(topicFile(candidate))
@@ -1347,7 +1514,7 @@ export function createStore(root) {
 
   /** 删除/归档条目。默认归档（可恢复），hard=true 才真删。 */
   function deleteEntry({ id, topic, sessionId, hard }) {
-    const slug = topic ? slugify(topic) : currentTopic(sessionId)
+    const slug = topic ? resolveSlug(topic) : currentTopic(sessionId)
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
       const observed = statFile(topicFile(candidate))
@@ -1370,7 +1537,7 @@ export function createStore(root) {
 
   /** 恢复归档条目：status 回 active，清 archivedAt（Web UI 的「恢复」用它）。 */
   function restoreEntry({ id, topic }) {
-    const slug = topic ? slugify(topic) : null
+    const slug = topic ? resolveSlug(topic) : null
     const candidates = slug ? [slug] : listTopics().map(t => t.slug)
     for (const candidate of candidates) {
       const observed = statFile(topicFile(candidate))
@@ -1490,7 +1657,7 @@ export function createStore(root) {
 
   /** 列出条目，支持按状态/类型/标签/领域/关键词过滤。 */
   function listEntries({ topic, sessionId, limit, status, kind, tag, appliesTo, query }) {
-    const slug = topic ? slugify(topic) : currentTopic(sessionId)
+    const slug = topic ? resolveSlug(topic) : currentTopic(sessionId)
     if (!slug) {
       throw new Error('当前会话没有绑定主题：先调用 learn_topics(action="create"|"use") 指定主题')
     }
@@ -1568,6 +1735,8 @@ export function createStore(root) {
     listTopics,
     findTopic,
     createTopic,
+    updateTopic,
+    resolveSlug,
     readEntries,
     topicStamp,
     currentTopic,

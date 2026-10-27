@@ -2,6 +2,7 @@
 // 校验：本地插件可加载且导出正确、persona 关键规则没被改掉、工具无重复挂载。
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -491,9 +492,121 @@ if (!toolsSource.includes('kbTokens')) {
   }
 }
 
+// 4. 跨版本兼容探针的接线：探针文件、导出、宿主路由、客户端提示条，
+//    四处只要断一处，「DSH 换版本后哪里对不上」就又变成看不见的问题了。
+{
+  const compatPath = path.join(root, 'plugin', 'compat.js')
+  if (!fs.existsSync(compatPath)) {
+    fail('缺 plugin/compat.js：DSH 换版本后没法自报缺了哪条宿主能力')
+  } else {
+    try {
+      const mod = await import(pathToFileURL(compatPath).href)
+      for (const name of ['probeCompat', 'probeRuntime', 'REQUIRED_HOST_API', 'OPTIONAL_HOST_API']) {
+        if (!(name in mod)) fail(`plugin/compat.js 缺导出 ${name}`)
+      }
+      // 探针不许在加载期抛：CI 里 import 一次就算跑过
+      const report = mod.probeCompat({})
+      if (!report || report.ok !== false) fail('probeCompat({}) 应给出 ok:false 的报告（空宿主什么都不满足）')
+      if (!Array.isArray(report.missing) || !report.missing.length) fail('probeCompat({}) 应报出缺失项')
+    } catch (error) {
+      fail(`plugin/compat.js 无法加载或探测抛错：${error.message}`)
+    }
+  }
+
+  const hostText = fs.readFileSync(path.join(root, 'plugin', 'index.js'), 'utf8')
+  if (!hostText.includes("from './compat.js'")) fail('plugin/index.js 没有引入 compat.js')
+  if (!hostText.includes("'/compat'")) fail("plugin/index.js 没有挂 /compat 路由：界面拿不到兼容报告")
+  if (!hostText.includes('probeCompat(ctx)')) fail('plugin/index.js 没有在启动时跑一次 probeCompat')
+
+  const clientText = fs.readFileSync(path.join(root, 'client', 'index.js'), 'utf8')
+  for (const bit of ['kb-compat', "apiGet('/compat'", 'compatBanner']) {
+    if (!clientText.includes(bit)) {
+      fail(`client/index.js 缺少 ${bit}：兼容问题会变成「面板半残但没说原因」`)
+    }
+  }
+}
+
+// 5. 改名能力（2026-10-26 用户要求「主题和知识卡片的名字，都可以在 ui 随意编辑」）
+//    四条线要同时在：存储层的 updateTopic、宿主路由、界面入口、词典。
+//    少任何一条，界面就会「有个按钮但没反应」；更糟的是能改名却把卡片弄丢了。
+{
+  const storeMod = await import(pathToFileURL(path.join(root, 'plugin', 'store.js')).href)
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-check-'))
+  const probeStore = storeMod.createStore(tempRoot)
+  const slug = probeStore.createTopic('自检主题')
+  probeStore.planSave({ topic: slug, cards: [{ title: '自检卡片', body: '正文' }], dryRun: false })
+  const renamed = probeStore.updateTopic(slug, { name: '自检主题改过' })
+  if (renamed.slug !== slug) fail('updateTopic 改了目录 slug：改名会动到几百条数据')
+  if (renamed.name !== '自检主题改过') fail('updateTopic 没有改显示名')
+  if (probeStore.listEntries({ topic: slug }).entries.length !== 1) fail('改名之后卡片丢了')
+  if (!probeStore.findTopic('自检主题')) fail('改名之后旧名查不到了：旧名要进 aliases')
+  fs.rmSync(tempRoot, { recursive: true, force: true })
+
+  const hostText = fs.readFileSync(path.join(root, 'plugin', 'index.js'), 'utf8')
+  if (!hostText.includes("'/topic/update'")) fail("plugin/index.js 没有挂 /topic/update 路由")
+  if (!hostText.includes('handleTopicUpdate')) fail('plugin/index.js 没有 handleTopicUpdate')
+
+  const clientText = fs.readFileSync(path.join(root, 'client', 'index.js'), 'utf8')
+  for (const bit of ['kb-topic-edit', 'kb-rename-btn', 'TopicEdit', "apiPost('/topic/update'"]) {
+    if (!clientText.includes(bit)) {
+      fail(`client/index.js 缺少 ${bit}：改名入口没接上`)
+    }
+  }
+  // 词典：改名相关的文案必须中英都有，否则英文环境会露出 key
+  const dictText = clientText
+  for (const key of ['topicEdit', 'topicEditName', 'cardRename', 'cardRenameTitle']) {
+    if ((dictText.match(new RegExp(key + ':', 'g')) || []).length < 2) {
+      fail(`client/index.js 词典缺少 ${key}：中英两段都要有这个键`)
+    }
+  }
+}
+
+// 6. 入库批次 / 新卡动作 / 展开体验（2026-10-26 用户三条反馈）
+//    这三处的共同点：都是「界面上少了一样东西，用户只看到结果不对」，
+//    所以接线断了要当场发现，不能等用户再反馈一遍。
+{
+  const hostText = fs.readFileSync(path.join(root, 'plugin', 'index.js'), 'utf8')
+  // 预览卡（没 id）也要能校验/追问：只读接口接受内联卡片（body.card）
+  if (!hostText.includes('body.card')) {
+    fail('plugin/index.js 没接内联卡片：还没入库的卡片用不了「AI 校验补充 / 问一下」')
+  }
+  if (!hostText.includes('projectCard({ ...inline')) {
+    fail('plugin/index.js 的 locateCard 没有内联卡片分支')
+  }
+
+  const clientText = fs.readFileSync(path.join(root, 'client', 'index.js'), 'utf8')
+  const mustHave = [
+    ['saves', '同一轮多个待写入批次要全部收下'],
+    ['cardBatch', '卡片 → 批次的对应关系要保住'],
+    ['absorbWritten', '/save 之后要把 id 补回卡片'],
+    ['inlineCardOf', '预览卡的校验/追问要把卡片内容带过去'],
+    ['GROUP_PAGE', '分组翻页的每页条数'],
+    ['revealMore', '分组翻页的入口'],
+    ['useLayoutEffect', '翻页要保持视口，不能跳到底部'],
+  ]
+  for (const [bit, why] of mustHave) {
+    if (!clientText.includes(bit)) fail(`client/index.js 缺少 ${bit}：${why}`)
+  }
+  // 老的全局「展开全部」不能再回来了：它会一口气把所有组全铺开
+  if (clientText.includes("translate('expandAll')")) {
+    fail("client/index.js 又用回全局「展开全部」：要按组翻页（用户反馈一口气全打开很不好）")
+  }
+  // 词典：新增文案中英都要有
+  for (const key of ['saveConfirmAll', 'saveBatch', 'showMore']) {
+    if ((clientText.match(new RegExp(key + ':', 'g')) || []).length < 2) {
+      fail(`client/index.js 词典缺少 ${key}：中英两段都要有这个键`)
+    }
+  }
+  // persona：learn_save 的条数说明必须写清楚「不设上限 + 分批别停下」
+  const patchText = fs.readFileSync(patchPath, 'utf8')
+  if (!patchText.includes('不设条数上限') && !patchText.includes('别出完一批就停下')) {
+    fail('cordis.patch.yml 的 persona 缺少 learn_save 条数说明：agent 会乱分批、停下等用户催')
+  }
+}
+
 if (problems.length) {
   console.error('自检未通过：')
   for (const problem of problems) console.error('  - ' + problem)
   process.exit(1)
 }
-console.log('自检通过：插件可加载且导出正确、工具参数是标准 JSON Schema、persona 关键规则齐全、工具无重复挂载、知识库 UI 三处接线一致。')
+console.log('自检通过：插件可加载且导出正确、工具参数是标准 JSON Schema、persona 关键规则齐全、工具无重复挂载、知识库 UI 三处接线一致、跨版本兼容探针接线完整、改名能力接线完整、入库批次与展开体验接线完整。')

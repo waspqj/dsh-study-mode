@@ -48,11 +48,15 @@ window.__ModuleLoader__.load({
     function install(React, exports) {
     const h = React.createElement
     const { useState, useEffect, useRef, useCallback } = React
+    // useLayoutEffect：真实 React 里有，但浏览器半侧只保证能 require('react')，
+    // 不保证宿主给的 React 对象带这个钩子 —— 没有就退回 useEffect
+    // （效果差一点点：还原滚动位置会晚一帧，但不会崩）。
+    const useLayoutEffect = typeof React.useLayoutEffect === 'function' ? React.useLayoutEffect : React.useEffect
 
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.20'
+    const UI_REV = '0.3.21'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -103,6 +107,19 @@ window.__ModuleLoader__.load({
         saveFailed: '保存失败',
         noTopic: '还没有主题：先在「学习模式」会话里建一个，或点「新增」直接输入主题名',
         newTopic: '新建主题（输入名称）',
+        // 主题编辑（2026-10-26 用户要求：主题名/卡片名都能在 ui 随便改）
+        topicEdit: '编辑主题',
+        topicEditTitle: '编辑主题',
+        topicEditName: '主题名称',
+        topicEditDesc: '主题说明',
+        topicEditKeywords: '关键词（逗号分隔）',
+        topicEditDomain: '所属领域',
+        topicEditSaved: '主题已更新',
+        topicEditHint: '改名不会丢卡片，旧名字照样能搜到',
+        topicEditAlias: '旧名字',
+        cardRename: '改名',
+        cardRenameTitle: '卡片标题',
+        cardRenameSaved: '卡片已改名',
         expand: '展开',
         collapse: '收起',
         rootPath: '存储位置',
@@ -139,6 +156,9 @@ window.__ModuleLoader__.load({
         proposalTopic: '补到',
         // 预览先行的写入条
         saveBarTitle: '这批卡片还没进库：',
+        saveBatch: '第',
+        saveConfirmAll: '全部写入',
+        showMore: '再看',
         unitCards: '条',
         notWritten: '（未写入）',
         saveConfirm: '确认写入',
@@ -280,6 +300,19 @@ window.__ModuleLoader__.load({
         saveFailed: 'Save failed',
         noTopic: 'No topics yet: create one in a learning-mode session first',
         newTopic: 'New topic name',
+        // 主题编辑（2026-10-26 用户要求：主题名/卡片名都能在 ui 随便改）
+        topicEdit: 'Edit topic',
+        topicEditTitle: 'Edit topic',
+        topicEditName: 'Topic name',
+        topicEditDesc: 'Description',
+        topicEditKeywords: 'Keywords (comma separated)',
+        topicEditDomain: 'Domain',
+        topicEditSaved: 'Topic updated',
+        topicEditHint: 'Renaming keeps every card; the old name still works',
+        topicEditAlias: 'Former names',
+        cardRename: 'Rename',
+        cardRenameTitle: 'Card title',
+        cardRenameSaved: 'Card renamed',
         expand: 'Expand',
         collapse: 'Collapse',
         rootPath: 'Storage',
@@ -312,6 +345,9 @@ window.__ModuleLoader__.load({
         proposalConfirm: 'Write',
         proposalTopic: 'Add to',
         saveBarTitle: 'These cards are not in the library yet:',
+        saveBatch: 'Batch',
+        saveConfirmAll: 'Write all',
+        showMore: 'Show more',
         unitCards: 'cards',
         notWritten: '(not written)',
         saveConfirm: 'Write them',
@@ -424,6 +460,11 @@ window.__ModuleLoader__.load({
 .kb-btn.primary:hover{opacity:.9}
 .kb-btn.danger{color:var(--dsw-alias-state-error-primary);border-color:var(--dsw-alias-state-error-primary)}
 .kb-btn.danger:hover{background:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-bg-base)}
+/* 兼容提示条：常驻在搜索框上方，只在真缺能力时出现（正常时 DOM 里没有这个节点） */
+.kb-compat{display:flex;align-items:baseline;gap:8px;margin:0 18px 8px;padding:7px 10px;border-radius:6px;font-size:12px;line-height:1.5;flex:none;color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-primary));background:color-mix(in srgb,var(--dsw-alias-state-warning-primary,#d97706) 12%,transparent);border:1px solid color-mix(in srgb,var(--dsw-alias-state-warning-primary,#d97706) 35%,transparent)}
+.kb-compat.fatal{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent);border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 35%,transparent)}
+.kb-compat strong{font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.kb-compat span{min-width:0}
 .kb-btn:disabled{opacity:.45;cursor:default}
 .kb-search{display:flex;align-items:center;gap:10px;padding:0 18px 12px;flex:none;flex-wrap:wrap}
 .kb-input,.kb-select,.kb-textarea{font:inherit;font-size:12.5px;height:34px;color:var(--dsw-alias-label-primary);background:var(--kb-field);border:1px solid var(--kb-line);border-radius:8px;padding:0 12px;outline:none;transition:border-color .12s ease,box-shadow .12s ease}
@@ -467,6 +508,18 @@ window.__ModuleLoader__.load({
 .kb-badge.warn{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
 .kb-badge.idle{color:var(--dsw-alias-state-idle-primary);border-color:var(--dsw-alias-state-idle-primary)}
 .kb-badge.quiet{color:var(--dsw-alias-label-secondary);border-color:var(--dsw-alias-border-l1);opacity:.9}
+/* 主题改名入口（左侧主题栏那一行的铅笔） */
+.kb-topic-edit{flex:none;width:18px;height:18px;line-height:1;font-size:11px;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid transparent;border-radius:4px;cursor:pointer;opacity:0;transition:opacity .12s ease,color .12s ease}
+.kb-topic:hover .kb-topic-edit,.kb-topic-edit:focus-visible{opacity:1}
+.kb-topic-edit:hover{color:var(--kb-accent);border-color:var(--kb-line)}
+/* 主题编辑弹窗里的「旧名字」提示 */
+.kb-topic-alias{margin-top:8px;font-size:11.5px;color:var(--dsw-alias-label-secondary);opacity:.85}
+.kb-topic-alias-cap{color:var(--dsw-alias-label-primary);font-weight:600}
+/* 卡片改名（详情浮层标题旁的铅笔 + 展开后的输入行） */
+.kb-rename-btn{flex:none;margin-left:8px;font-size:12px;line-height:1;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid transparent;border-radius:4px;padding:2px 4px;cursor:pointer;opacity:.55;vertical-align:middle;transition:opacity .12s ease,color .12s ease}
+.kb-rename-btn:hover{opacity:1;color:var(--kb-accent);border-color:var(--kb-line)}
+.kb-rename{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0}
+.kb-rename .kb-input{flex:1 1 auto;min-width:0;font-size:15px;font-weight:600}
 .kb-meta{margin-left:auto;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
 .kb-q{color:var(--dsw-alias-label-secondary);font-size:11.5px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kb-text{margin-top:4px;font-size:12.5px;line-height:1.55;min-height:20px;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
@@ -603,6 +656,11 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
 .kb-group-head{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary);opacity:.9;padding:0 2px}
 /* 预览先行的写入条：卡片底下那一个「确认写入 N 条」 */
 .kb-save-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:2px;padding:8px 10px;border:1px solid color-mix(in srgb,var(--kb-accent) 40%,transparent);border-radius:9px;background:color-mix(in srgb,var(--kb-accent) 10%,transparent)}
+/* 多个待写入批次：每批一条，上面再跟一条「全部写入」（2026-10-26 用户反馈：
+   以前只渲染最后一批，用户一次只能写进去 16 张） */
+.kb-save-bars{display:flex;flex-direction:column;gap:6px;margin-top:2px}
+.kb-save-bar-all{border-color:color-mix(in srgb,var(--kb-accent) 65%,transparent);background:color-mix(in srgb,var(--kb-accent) 16%,transparent)}
+.kb-save-bar-done{border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary) 40%,transparent);background:color-mix(in srgb,var(--dsw-alias-state-success-primary) 8%,transparent)}
 .kb-save-bar-text{font-size:12px;color:var(--dsw-alias-label-primary)}
 .kb-save-bar-text b{font-weight:650}
 .kb-save-bar-topic{font-size:11.5px;color:var(--dsw-alias-label-secondary);opacity:.9}
@@ -807,6 +865,12 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         // 直接把「未知接口」甩给用户没有意义，这里说清楚要重启。
         // /save 同理：它也是批次 2 新加的路由（预览先行的「确认写入」）。
         if (res.status === 404 && (String(path).startsWith('/card/') || String(path) === '/save')) {
+          throw new Error('这个功能要重启 DSH 之后才生效（宿主半侧还没重新加载）')
+        }
+        // 预览卡（还没入库）能校验/追问，靠的是宿主半侧认「内联卡片」。
+        // 宿主还是旧代码时，它会回「缺少条目 id」—— 这不是用户的错，
+        // 说清楚要重启，别让他以为卡片坏了。
+        if (String(message).includes('缺少条目 id') && String(path).startsWith('/card/')) {
           throw new Error('这个功能要重启 DSH 之后才生效（宿主半侧还没重新加载）')
         }
         throw new Error(message)
@@ -1312,8 +1376,39 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const [confirming, setConfirming] = useState(false)
       const [panel, setPanel] = useState('')
       const [rollbackBusy, setRollbackBusy] = useState(false)
+      // 改名（2026-10-26 用户要求：卡片名可以在 ui 随意改）
+      const [renaming, setRenaming] = useState(false)
+      const [renameText, setRenameText] = useState(entry.title || '')
+      const [renameBusy, setRenameBusy] = useState(false)
+      const [renameError, setRenameError] = useState('')
       const timer = useRef(null)
       const archived = entry.status === 'archived'
+
+      /**
+       * 改名走 /update（标题在 UPDATABLE 里），写回后版本号会升。
+       *
+       * 为什么不在这里直接调 store：界面只能走 HTTP 接口，
+       * 宿主那边是另一套（模型用的是 tools.js 里的 store 直调）。
+       */
+      const doRename = async () => {
+        const next = renameText.trim()
+        if (!next) return setRenameError(t('needTitle'))
+        setRenameBusy(true)
+        setRenameError('')
+        try {
+          const data = await apiPost('/update', {
+            id: entry.id,
+            topic: entry.topic,
+            fields: { title: next },
+          })
+          setRenaming(false)
+          if (onChanged) onChanged({ title: data.title || next, version: data.version })
+        } catch (err) {
+          setRenameError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setRenameBusy(false)
+        }
+      }
 
       const rollback = async () => {
         setRollbackBusy(true)
@@ -1368,7 +1463,48 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           h(
             'div',
             { className: 'kb-modal-head' },
-            h('div', { className: 'kb-modal-title' }, entry.title),
+            renaming
+              ? h(
+                  'div',
+                  { className: 'kb-rename' },
+                  h('input', {
+                    className: 'kb-input',
+                    value: renameText,
+                    autoFocus: true,
+                    placeholder: t('cardRenameTitle'),
+                    onChange: (event) => setRenameText(event.target.value),
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter') doRename()
+                      if (event.key === 'Escape') setRenaming(false)
+                    },
+                  }),
+                  h('button', { className: 'kb-btn primary', disabled: renameBusy, onClick: doRename }, t('save')),
+                  h(
+                    'button',
+                    { className: 'kb-btn', disabled: renameBusy, onClick: () => setRenaming(false) },
+                    t('cancel'),
+                  ),
+                  renameError ? h('span', { className: 'kb-err' }, renameError) : null,
+                )
+              : h(
+                  'div',
+                  { className: 'kb-modal-title' },
+                  entry.title,
+                  h(
+                    'button',
+                    {
+                      className: 'kb-rename-btn',
+                      title: t('cardRename'),
+                      'aria-label': t('cardRename'),
+                      onClick: () => {
+                        setRenameText(entry.title || '')
+                        setRenameError('')
+                        setRenaming(true)
+                      },
+                    },
+                    '✎',
+                  ),
+                ),
             h('button', { className: 'kb-btn', onClick: onClose }, t('close')),
           ),
           h(
@@ -1546,10 +1682,164 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       )
     }
 
+    // ---------------------------------------------------------------- 主题编辑
+    /**
+     * 主题编辑弹窗：改名 / 改说明 / 改关键词 / 改领域。
+     *
+     * 2026-10-26 用户要求「主题和知识卡片的名字，都可以在 ui 随意编辑」。
+     *
+     * 改名只改显示名，目录 slug 不动（见 store.updateTopic 的说明）：
+     * 卡片一条都不丢，旧名字还能搜到。弹窗里把「旧名字」列出来，
+     * 是为了让用户知道改完以后老名字依然有效 —— 不然他会担心「历史找不到了」。
+     */
+    function TopicEdit(props) {
+      const { topic, t, onCancel, onSaved } = props
+      const [name, setName] = useState(topic.name || '')
+      const [description, setDescription] = useState(topic.description || '')
+      const [keywords, setKeywords] = useState((topic.keywords || []).join(', '))
+      const [domain, setDomain] = useState(topic.domain || '')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+
+      const save = async () => {
+        if (!name.trim()) return setError(t('needTopic'))
+        setBusy(true)
+        setError('')
+        try {
+          const result = await apiPost('/topic/update', {
+            slug: topic.slug,
+            name: name.trim(),
+            description: description.trim(),
+            keywords: keywords
+              .split(/[,，、]/)
+              .map(item => item.trim())
+              .filter(Boolean),
+            domain: domain.trim(),
+          })
+          if (onSaved) onSaved(result)
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const aliases = topic.aliases || []
+      return h(
+        'div',
+        { className: 'kb-overlay', onClick: onCancel },
+        h(
+          'div',
+          { className: 'kb-modal', onClick: (event) => event.stopPropagation() },
+          h(
+            'div',
+            { className: 'kb-modal-head' },
+            h('div', { className: 'kb-modal-title' }, t('topicEditTitle')),
+            h('button', { className: 'kb-btn', onClick: onCancel }, t('close')),
+          ),
+          h(
+            'div',
+            { className: 'kb-modal-body' },
+            h(
+              'label',
+              null,
+              t('topicEditName'),
+              h('input', {
+                className: 'kb-input',
+                value: name,
+                onChange: (event) => setName(event.target.value),
+              }),
+            ),
+            h(
+              'label',
+              null,
+              t('topicEditDesc'),
+              h('textarea', {
+                className: 'kb-textarea',
+                value: description,
+                onChange: (event) => setDescription(event.target.value),
+              }),
+            ),
+            h(
+              'label',
+              null,
+              t('topicEditKeywords'),
+              h('input', {
+                className: 'kb-input',
+                value: keywords,
+                onChange: (event) => setKeywords(event.target.value),
+              }),
+            ),
+            h(
+              'label',
+              null,
+              t('topicEditDomain'),
+              h('input', {
+                className: 'kb-input',
+                value: domain,
+                onChange: (event) => setDomain(event.target.value),
+              }),
+            ),
+            aliases.length
+              ? h(
+                  'div',
+                  { className: 'kb-topic-alias' },
+                  h('span', { className: 'kb-topic-alias-cap' }, t('topicEditAlias') + '：'),
+                  aliases.join('、'),
+                )
+              : null,
+            h('div', { className: 'kb-note' }, t('topicEditHint')),
+            error ? h('div', { className: 'kb-err' }, error) : null,
+          ),
+          h(
+            'div',
+            { className: 'kb-modal-foot' },
+            h('span', { className: 'kb-grow' }),
+            h('button', { className: 'kb-btn primary', disabled: busy, onClick: save }, t('save')),
+            h('button', { className: 'kb-btn', disabled: busy, onClick: onCancel }, t('cancel')),
+          ),
+        ),
+      )
+    }
+
     // ---------------------------------------------------------------- 主面板
     /** 由 apply 注入的翻译函数（locale 服务就绪后才拿得到） */
     let translate = (key) => (DICT.zh[key] !== undefined ? DICT.zh[key] : key)
     const t = (key) => translate(key)
+
+    /**
+     * 宿主兼容提示条。
+     *
+     * 只在三种情况下出现：
+     *   1. 缺必需能力（/kb/api 路由或 learn_* 工具挂不上）—— 红色，说明哪里对不上；
+     *   2. 只是降级（没有 llm / agentDefaultModel）—— 黄色，说明 AI 相关功能不可用；
+     *   3. 都不是 —— 返回 null，一个字都不显示（日常使用零噪音）。
+     *
+     * 为什么不用 toast/弹窗：这是**常驻状态**，不是一次性事件。用户下次打开面板
+     * 还想看到「我这个 DSH 版本缺什么」，弹一下就没的东西做不到这件事。
+     */
+    function compatBanner(report) {
+      if (!report || typeof report !== 'object') return null
+      const missing = Array.isArray(report.missing) ? report.missing : []
+      const degraded = Array.isArray(report.degraded) ? report.degraded : []
+      if (!missing.length && !degraded.length) return null
+      const version = report.runtime && report.runtime.version ? String(report.runtime.version) : '未知版本'
+      const fatal = missing.length > 0
+      const title = fatal ? '这个 DSH 版本缺少知识库必需的能力' : '部分 AI 功能在该 DSH 版本上不可用'
+      const detail = fatal
+        ? '缺：' + missing.join('、') + '。面板可以打开，但路由或工具可能不工作。'
+        : '缺：' + degraded.join('、') + '。读写知识库照常，AI 校验/追问/检索重排会不可用。'
+      return h(
+        'div',
+        {
+          className: 'kb-compat' + (fatal ? ' fatal' : ''),
+          // 原始字段也挂在 title 上：排查时把鼠标停一下就能复制，不用翻日志
+          title: 'DSH ' + version + '\n' + (report.checks || []).map((c) => (c.ok ? '✓ ' : '✗ ') + c.label).join('\n'),
+        },
+        h('strong', null, 'DSH ' + version),
+        h('span', null, title + '。' + detail),
+      )
+    }
 
     function Panel() {
       const [overview, setOverview] = useState(null)
@@ -1566,6 +1856,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const [busyId, setBusyId] = useState('')
       const [adding, setAdding] = useState(false)
       const [detail, setDetail] = useState(null)
+      // 正在编辑的主题（改名/改说明/改关键词/改领域）
+      const [editingTopic, setEditingTopic] = useState(null)
       // 打开详情前正在取正文全文（列表只给摘要）
       const [detailLoading, setDetailLoading] = useState(false)
       const [multi, setMulti] = useState(false)
@@ -1578,6 +1870,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       /** 插件 AI 模型设置 + 可选模型目录（{aiModel, session, active, catalog}） */
       const [aiModelData, setAiModelData] = useState(null)
       const [aiModelBusy, setAiModelBusy] = useState(false)
+      /** 宿主兼容报告（{ok, missing, degraded, runtime}）：DSH 换版本后哪里对不上就看它 */
+      const [compat, setCompat] = useState(null)
 
       const refresh = useCallback(() => setTick((value) => value + 1), [])
 
@@ -1712,6 +2006,21 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         return () => controller.abort()
       }, [topic, status, debounced, tick])
 
+      // 宿主兼容报告：只拉一次（跟 tick 走，刷新时重探）。
+      // 拉不到不是致命错误 —— 老版本宿主没有 /compat 这个接口，
+      // 这时 setCompat(null)，界面就不显示那一行，行为与以前一致。
+      useEffect(() => {
+        const controller = new AbortController()
+        apiGet('/compat', {}, controller.signal)
+          .then((data) => {
+            if (alive.current) setCompat(data || null)
+          })
+          .catch(() => {
+            // 接口不存在 / 探针失败：静默降级，不打扰用户
+          })
+        return () => controller.abort()
+      }, [tick])
+
       const flash = (message) => {
         setNotice(message)
         if (noticeTimer.current) clearTimeout(noticeTimer.current)
@@ -1802,6 +2111,11 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           h('button', { className: 'kb-btn', onClick: refresh, disabled: loading }, t('refresh')),
           h('button', { className: 'kb-btn primary', onClick: () => setAdding(!adding) }, t('add')),
         ),
+        // 宿主兼容提示：只在真的对不上时出现。
+        // 设计取舍 —— 正常的时候一个字都不显示，别给日常使用添噪音；
+        // 一旦 DSH 换版本换了接口，这行就是唯一的线索（否则表现是「面板半残」
+        // 或者「侧边栏少一格」，用户无从判断，我们也没法从截图里看出问题）。
+        compatBanner(compat),
         h(
           'div',
           { className: 'kb-search' },
@@ -1858,6 +2172,18 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 h('span', { className: 'kb-dot' }),
                 h('span', { className: 'kb-name' }, item.name),
                 h('span', { className: 'kb-n' }, String(status === 'active' ? item.activeCount : item.count)),
+                // 改名入口（2026-10-26 用户要求：主题名可以在 ui 随意改）。
+                // 放在行内而不是别处：用户要改的就是这一行显示的名字。
+                h(
+                  'button',
+                  {
+                    className: 'kb-topic-edit',
+                    title: t('topicEdit'),
+                    'aria-label': t('topicEdit'),
+                    onClick: withStop(() => setEditingTopic(item)),
+                  },
+                  '✎',
+                ),
               ),
             ),
             h('div', { className: 'kb-rail-foot' }, '共 ' + totalAll + ' 条'),
@@ -1994,6 +2320,18 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 h('div', { className: 'kb-modal-body' }, '正在取完整正文…'),
               ),
             )
+          : null,
+        editingTopic
+          ? h(TopicEdit, {
+              topic: editingTopic,
+              t,
+              onCancel: () => setEditingTopic(null),
+              onSaved: () => {
+                setEditingTopic(null)
+                flash(t('topicEditSaved'))
+                refresh()
+              },
+            })
           : null,
         detail
           ? h(EntryModal, {
@@ -2640,7 +2978,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         setBusy(true)
         setErr('')
         try {
-          const data = await apiPost('/card/review', { id: card.id, topic: card.topic, mode: 'verify' })
+          const inline = inlineCardOf(card)
+          const data = await apiPost('/card/review', { id: card.id, topic: card.topic, mode: 'verify', ...(inline ? { card: inline } : {}) })
           if (!data.ok) {
             setErr(data.reason || translate('saveFailed'))
             return
@@ -2833,7 +3172,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         setBusy(true)
         setErr('')
         try {
-          const data = await apiPost('/card/ask', { id: card.id, topic: card.topic, question: text, history })
+          const inline = inlineCardOf(card)
+          const data = await apiPost('/card/ask', { id: card.id, topic: card.topic, question: text, history, ...(inline ? { card: inline } : {}) })
           if (!data.ok) {
             setErr(data.reason || translate('saveFailed'))
             return
@@ -2935,7 +3275,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         setBusy(true)
         setErr('')
         try {
-          const data = await apiPost('/card/review', { id: card.id, topic: card.topic, mode: 'both' })
+          const inline = inlineCardOf(card)
+          const data = await apiPost('/card/review', { id: card.id, topic: card.topic, mode: 'both', ...(inline ? { card: inline } : {}) })
           if (!data.ok) {
             setErr(data.reason || translate('saveFailed'))
             return
@@ -3254,6 +3595,35 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
      * 展开后才是正文 + 标签 + 三个动作（评审/编辑/问一下）—— 动作只在展开时出现，
      * 否则收起态的卡片就不小了。
      */
+    /**
+     * 卡片还没入库时，把内容**直接**带给只读接口。
+     *
+     * 评审（/card/review）和追问（/card/ask）只用这张卡的标题/正文/标签，
+     * 库里没有这条也能做 —— 2026-10-26 用户反馈「刚要入库正是需要这些功能的时候」，
+     * 预览阶段就该能校验、能追问。
+     *
+     * 只有**会写库**的操作（覆盖写回、回退、核实）不给这条路径：
+     * 库里没有条目，写回去写哪儿？
+     *
+     * @returns {object|null} 有 id 的卡返回 null（走正常路径）
+     */
+    function inlineCardOf(card) {
+      if (!card || card.id) return null
+      return {
+        title: String(card.title || ''),
+        body: String(card.body || ''),
+        topic: String(card.topic || ''),
+        topicName: String(card.topicName || card.topic || ''),
+        kind: card.kind === 'qa' ? 'qa' : 'point',
+        q: card.q || null,
+        tags: Array.isArray(card.tags) ? card.tags : [],
+        source: card.source || null,
+        appliesTo: card.appliesTo || null,
+        verified: card.verified ?? false,
+        version: card.version || 1,
+      }
+    }
+
     function ChatCard(props) {
       const { card, onSaved, compact = false, onWriteOne = null, writeState = '' } = props
       const [panel, setPanel] = useState('')
@@ -3388,25 +3758,34 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 ),
                 h('button', { className: 'kb-mini', onClick: () => setPanel(panel === 'ask' ? '' : 'ask') }, translate('actAsk')),
               )
-            : onWriteOne
-              ? h(
-                  'span',
-                  { className: 'kb-work-row' },
-                  h(
-                    'button',
-                    {
-                      className: 'kb-mini primary',
-                      disabled: writeState === 'busy' || writeState === 'done',
-                      onClick: () => onWriteOne(card),
-                    },
-                    writeState === 'done'
-                      ? translate('cardWritten')
-                      : writeState === 'busy'
-                        ? translate('proposalGenerating')
-                        : translate('cardWriteOne'),
-                  ),
-                )
-              : h('span', { className: 'kb-work-note' }, translate('cardPendingNote')),
+            : h(
+                'span',
+                { className: 'kb-work-row' },
+                // 预览态卡片（还没进库）：**校验和追问是只读的**，内容直接传过去就能用 ——
+                // 2026-10-26 用户反馈「刚要入库正是需要这些功能的时候」。
+                // 写回不在这儿：库里还没这条，没地方可写（先「写入这条」，之后就能覆盖写回）。
+                h(
+                  'button',
+                  { className: 'kb-mini', onClick: () => setPanel(panel === 'work' ? '' : 'work') },
+                  translate('actReview'),
+                ),
+                h('button', { className: 'kb-mini', onClick: () => setPanel(panel === 'ask' ? '' : 'ask') }, translate('actAsk')),
+                onWriteOne
+                  ? h(
+                      'button',
+                      {
+                        className: 'kb-mini primary',
+                        disabled: writeState === 'busy' || writeState === 'done',
+                        onClick: () => onWriteOne(card),
+                      },
+                      writeState === 'done'
+                        ? translate('cardWritten')
+                        : writeState === 'busy'
+                          ? translate('proposalGenerating')
+                          : translate('cardWriteOne'),
+                    )
+                  : null,
+              ),
         ),
         panel === 'work' ? h(Workbench, { card, autoReview: true, onClose: () => setPanel(''), onSaved: update }) : null,
         panel === 'edit' ? h(Workbench, { card, autoReview: false, onClose: () => setPanel(''), onSaved: update }) : null,
@@ -3435,8 +3814,20 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     const EMPTY_OPEN_REL = Object.freeze([])
     /** 相关补充先摆几行；超出的折成「再看 N 条」（条数本身不设上限）。 */
     const RELATED_VISIBLE = 12
+    /**
+     * 卡片分组先摆几张，其余用「再看 N 条」翻页。
+     *
+     * 2026-10-26 用户实测：以前折叠时每组只渲染 3 张，其余的**连 DOM 都不在**
+     * （点都点不到），点「展开全部」又一口气把所有组的卡片全铺开。
+     * 现在每组独立翻页，一次 +10。
+     */
+    const GROUP_PAGE = 10
     /** 稳定的空分组数组（同上，避免每次重算新引用）。 */
     const EMPTY_GROUPS = Object.freeze([])
+    /** 稳定的空批次数组（同一轮没有待写入批次时用）。 */
+    const EMPTY_SAVES = Object.freeze([])
+    /** 稳定的空映射（卡片 → 批次）。 */
+    const EMPTY_CARD_BATCH = Object.freeze({})
 
     /** 我们的 Turn Definition 在「这一轮」上占的 key。 */
     const KB_TURN_KIND = 'kb-cards'
@@ -3510,7 +3901,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     }
 
     /** 稳定的空 payload：没命中时返回同一个引用。 */
-    const EMPTY_PAYLOAD = Object.freeze({ cards: EMPTY_CARDS, related: EMPTY_CARDS, rerankTokens: 0, groups: EMPTY_GROUPS, save: null, source: '', proposal: null })
+    const EMPTY_PAYLOAD = Object.freeze({ cards: EMPTY_CARDS, related: EMPTY_CARDS, rerankTokens: 0, groups: EMPTY_GROUPS, saves: EMPTY_SAVES, source: '', proposal: null, cardBatch: EMPTY_CARD_BATCH })
 
     /** 按角色分组：库中已有 / 本次新增 / 本次更新 / 待写入，各一组不混排。 */
     function groupCards(cards) {
@@ -3585,22 +3976,40 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           collected.flatMap(entry => (Array.isArray(entry.related) ? entry.related : [])),
         ).filter(card => !hitKeys.has(cardKey(card)))
         let rerankTokens = 0
-        let save = null
+        // 同一轮里可能有**多个**待写入批次（2026-10-26 用户实测：
+        // agent 一次入库一个文件夹，分了 4 批 21/17/16/15 张；
+        // 以前这里只留最后一批，前面几批的「确认写入」按钮渲染不出来 →
+        // 用户一次只能入库 16 张，剩下 53 张要再催一次才写进去）。
+        // 现在**全部收下**，界面逐批给按钮，外加一个「全部写入」。
+        const saves = []
+        // 卡片 → 它属于哪个待写入批次。
+        //
+        // 为什么需要：一次 learn_save 的 tool/result 里，cards 和 save 是**同一次调用**
+        // 出来的，天然成对。攒成数组以后要保住这个对应关系 ——
+        // 否则「单独写入这一条」不知道该往哪个 batchId 提交。
+        const cardBatch = {}
         let proposal = null
         const sources = new Set()
         for (const entry of collected) {
-          // 同一轮里多次 learn_save：取最后一次的待写入批次
-          if (entry.save && entry.save.batchId) save = entry.save
+          if (entry.save && entry.save.batchId && !saves.some(item => item.batchId === entry.save.batchId)) {
+            saves.push(entry.save)
+          }
+          if (entry.save && entry.save.batchId && Array.isArray(entry.cards)) {
+            for (const card of entry.cards) {
+              const key = String((card && card.title) || '')
+              if (key && !cardBatch[key]) cardBatch[key] = entry.save.batchId
+            }
+          }
           // 同一轮里多次 learn_propose：取最后一次的提议
           if (entry.proposal && entry.proposal.id) proposal = entry.proposal
           if (entry.source) sources.add(entry.source)
           const spent = entry.tokens && entry.tokens.rerank ? Number(entry.tokens.rerank.totalTokens) : 0
           if (Number.isFinite(spent) && spent > 0) rerankTokens += spent
         }
-        if (cards.length === 0 && related.length === 0 && !save && !proposal) return EMPTY_PAYLOAD
+        if (cards.length === 0 && related.length === 0 && !saves.length && !proposal) return EMPTY_PAYLOAD
         // 只有一种来源时才敢用它的说法；混着来就笼统说「知识库卡片」
         const source = sources.size === 1 ? Array.from(sources)[0] : sources.size > 1 ? 'mixed' : ''
-        return { cards, related, rerankTokens, groups: groupCards(cards), save, source, proposal }
+        return { cards, related, rerankTokens, groups: groupCards(cards), saves, source, proposal, cardBatch }
       } catch {
         // 宿主内部结构变了就安静地不渲染，绝不能把会话搞坏
         return EMPTY_PAYLOAD
@@ -3624,16 +4033,57 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
      * 现在按 role 分组：库中已有 / 本次新增 / 本次更新 / 待写入。
      */
     function TurnTailCards(props) {
-      const [all, setAll] = useState(false)
+      // 每组先摆几张，剩下的用「再看 N 条」翻页（2026-10-26 用户反馈：
+      // 以前折叠时每组只渲染 3 张、其余的连 DOM 都不在，点都点不到；
+      // 点「展开全部」又一口气全铺开）。
+      const [revealed, setRevealed] = useState({})
+      /**
+       * 翻页时保持视口。
+       *
+       * 翻页按钮在卡片**下面**，点它会在上方插入卡片 → 浏览器会把视口往下带，
+       * 用户看到的就是「每次点展开就到了最底下」（2026-10-26 用户实测）。
+       * 办法：点之前记下 scrollY，渲染完（useLayoutEffect，绘制前）还原回去。
+       */
+      const scrollRef = useRef(null)
+      useLayoutEffect(() => {
+        const saved = scrollRef.current
+        if (!saved) return
+        scrollRef.current = null
+        try {
+          if (typeof window !== 'undefined' && window.scrollTo) window.scrollTo(saved.x, saved.y)
+        } catch {
+          /* 拿不到滚动位置就算了，别把会话搞坏 */
+        }
+      })
+      const revealMore = (role, rest) => {
+        try {
+          if (typeof window !== 'undefined' && window.scrollX !== undefined) {
+            scrollRef.current = { x: window.scrollX, y: window.scrollY }
+          }
+        } catch {
+          /* 同上 */
+        }
+        setRevealed(state => ({ ...state, [role]: (state[role] === undefined ? GROUP_PAGE : state[role]) + Math.min(GROUP_PAGE, rest) }))
+      }
       const [showRelated, setShowRelated] = useState(false)
       // 相关补充里，哪几行被点开了（键 = rel-<id|index>）。单独记，不跟折叠状态混。
       const [openRel, setOpenRel] = useState(EMPTY_OPEN_REL)
       // 相关补充超过 RELATED_VISIBLE 条时才用得上：false = 只摆前 12 条
       const [showAllRel, setShowAllRel] = useState(false)
-      const { cards, related, rerankTokens, groups, save, source, proposal } = turnPayloadOf(props)
-      // 待写入批次的落盘状态：点「确认写入」之后要能看出成没成
-      const [saveState, setSaveState] = useState({ busy: false, done: false, error: '' })
-      if (cards.length === 0 && related.length === 0 && !save && !proposal) return null
+      const { cards, related, rerankTokens, groups, saves, source, proposal, cardBatch } = turnPayloadOf(props)
+      // 每个批次的落盘状态：{busy, done, error, left}
+      const [saveStates, setSaveStates] = useState({})
+      /**
+       * 写入成功后回填的条目 id：标题 → {id, version}。
+       *
+       * 2026-10-26 用户反馈「刚入库的卡片没有 AI 校验补充和问一下大模型」。
+       * 原因：预览态的卡片故意不给 id（还没进库，拿旧 id 操作会改错东西），
+       * 而「确认写入」之后界面**没有把真 id 补回去** —— 卡片其实已经在库里了，
+       * 对话里却还显示「还没进库」，也没有那两个动作。
+       * 这里用 /save 返回的 plan 把 id 补回来。
+       */
+      const [writtenIds, setWrittenIds] = useState({})
+      if (cards.length === 0 && related.length === 0 && !saves.length && !proposal) return null
 
       const headBits = []
       // 计数要说实话：检索命中叫「命中」，清单列出来的叫「列出」——
@@ -3646,39 +4096,76 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       if (related.length) headBits.push('相关 ' + related.length + ' 条')
       if (rerankTokens > 0) headBits.push('重排 ' + formatTokens(rerankTokens) + ' tokens')
 
-      const writeNow = async () => {
-        if (!save || !save.batchId) return
-        setSaveState({ busy: true, done: false, error: '' })
-        try {
-          await apiPost('/save', { batchId: save.batchId })
-          setSaveState({ busy: false, done: true, error: '' })
-        } catch (error) {
-          const message = error && error.message ? String(error.message) : String(error)
-          setSaveState({ busy: false, done: false, error: message })
+      const setBatchState = (batchId, patch) =>
+        setSaveStates(state => ({ ...state, [batchId]: { ...(state[batchId] || {}), ...patch } }))
+
+      // 还没写进去的总条数（跨批次）与「有没有批次正在写」
+      let totalPending = 0
+      let anyBusy = false
+      for (const batch of saves) {
+        const state = saveStates[batch.batchId] || {}
+        if (state.busy) anyBusy = true
+        if (state.done) continue
+        totalPending += state.left === undefined ? batch.count || 0 : state.left
+      }
+
+      /** 把 /save 返回的 plan 变成「标题 → id」的覆盖层。 */
+      const absorbWritten = data => {
+        const ids = {}
+        for (const item of (data && data.plan) || []) {
+          if (item && item.id && item.title) ids[String(item.title)] = { id: item.id, version: item.version }
+        }
+        if (Object.keys(ids).length) setWrittenIds(state => ({ ...state, ...ids }))
+      }
+
+      /** 写一整批。batchId 为空 = 全部写。 */
+      const writeBatch = async batchId => {
+        const targets = batchId ? [batchId] : saves.map(item => item.batchId)
+        for (const target of targets) {
+          setBatchState(target, { busy: true, done: false, error: '' })
+          try {
+            const data = await apiPost('/save', { batchId: target })
+            absorbWritten(data)
+            setBatchState(target, { busy: false, done: true, error: '', left: 0 })
+          } catch (error) {
+            const message = error && error.message ? String(error.message) : String(error)
+            setBatchState(target, { busy: false, done: false, error: message })
+            return
+          }
         }
       }
 
       // 单张预览卡片单独写入（2026-10-24 用户要求：审批不能只能批量）
       // 键用标题：批次里的顺序可能变，标题是稳定的
       const [writeOneState, setWriteOneState] = useState({})
-      // 还剩几条没确认：单独写入后要跟着减，不能一直显示「确认写入 3 条」
-      const [saveLeft, setSaveLeft] = useState(null)
-      const leftCount = saveLeft === null ? (save && save.count) || 0 : saveLeft
-      const writeOne = async card => {
-        if (!save || !save.batchId) return
+      const writeOne = async (card, batchId) => {
+        if (!batchId) return
         const key = String(card.title || '')
         setWriteOneState(state => ({ ...state, [key]: 'busy' }))
         try {
-          const data = await apiPost('/save', { batchId: save.batchId, titles: [key] })
+          const data = await apiPost('/save', { batchId, titles: [key] })
           setWriteOneState(state => ({ ...state, [key]: 'done' }))
-          if (data && typeof data.remaining === 'number') setSaveLeft(data.remaining)
+          absorbWritten(data)
+          if (data && typeof data.remaining === 'number') setBatchState(batchId, { left: data.remaining })
           // 整批都确认完了 → 藏掉批量条，显示「已写入」
-          if (!data || !data.remaining) setSaveState({ busy: false, done: true, error: '' })
+          if (!data || !data.remaining) setBatchState(batchId, { busy: false, done: true, error: '' })
         } catch (error) {
           const message = error && error.message ? String(error.message) : String(error)
           setWriteOneState(state => ({ ...state, [key]: '' }))
-          setSaveState({ busy: false, done: false, error: message })
+          setBatchState(batchId, { busy: false, done: false, error: message })
         }
+      }
+
+      /**
+       * 卡片补上写入后的真 id。
+       *
+       * 有了 id，ChatCard 才会给「AI 校验补充 / 编辑 / 问一下」——
+       * 这正是「刚入库的卡片最需要这些功能」的时刻。
+       */
+      const withWrittenId = card => {
+        if (!card || card.id) return card
+        const hit = writtenIds[String(card.title || '')]
+        return hit ? { ...card, id: hit.id, version: hit.version || card.version } : card
       }
 
       // 提议条的状态：idle → 生成中 → 预览卡片（含 batchId）→ 已写入 / 放弃
@@ -3751,26 +4238,46 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           { className: 'kb-stack-head kb-turn-head' },
           h('span', null, headBits.filter(Boolean).join(' · ')),
         ),
-        groups.map(group =>
-          h(
+        groups.map(group => {
+          // 每组**独立**翻页：以前是一个全局开关控制所有分组，
+          // 点一下「展开全部」把所有组的卡片一口气全铺开（2026-10-26 用户反馈）。
+          const shown = revealed[group.role] === undefined ? GROUP_PAGE : revealed[group.role]
+          const visible = group.cards.slice(0, shown)
+          const rest = group.cards.length - visible.length
+          return h(
             'div',
             { className: 'kb-group', key: group.role },
             groups.length > 1
               ? h('div', { className: 'kb-group-head' }, translate(CARD_ROLES[group.role].groupKey) + ' ' + group.cards.length + ' ' + translate('unitCards'))
               : null,
-            (all ? group.cards : group.cards.slice(0, 3)).map((card, index) =>
-              h(ChatCard, {
-                key: (card.id || group.role) + '-' + index,
-                card,
+            visible.map((card, index) => {
+              const real = withWrittenId(card)
+              const batchId = cardBatch[String(card.title || '')] || ''
+              return h(ChatCard, {
+                key: (real.id || group.role) + '-' + index,
+                card: real,
                 // 会话末尾的卡片默认收成一行小预览，点一下才展开（2026-10-23 用户要求）
                 compact: true,
                 // 待写入的预览卡片：展开后可以单独写入这一条（2026-10-24 用户要求）
-                onWriteOne: save && save.batchId && !card.id ? writeOne : null,
+                onWriteOne: batchId && !real.id ? item => writeOne(item, batchId) : null,
                 writeState: writeOneState[String(card.title || '')] || '',
-              }),
-            ),
-          ),
-        ),
+              })
+            }),
+            // 翻页按钮放在**本组卡片下面**：一次 +10，不一口气全开。
+            // 点它会在上方插入卡片 → 视口会被带着跳到底部，所以点之前记一下滚动位置。
+            rest > 0
+              ? h(
+                  'div',
+                  { className: 'kb-turn-foot' },
+                  h(
+                    'button',
+                    { className: 'kb-mini', onClick: () => revealMore(group.role, rest) },
+                    translate('showMore') + ' ' + Math.min(GROUP_PAGE, rest) + ' ' + translate('unitCards'),
+                  ),
+                )
+              : null,
+          )
+        }),
         // 提议条：模型说「库里缺这几条」时，别让它埋在正文最后一行（用户实测看漏），
         // 也别用 ask_user_question（那会让这一轮多一个步骤，回答被折进过程组）。
         // 由 learn_propose 发布到 turnTail，不受过程组折叠影响。
@@ -3861,49 +4368,57 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         proposal && propState.done
           ? h('div', { className: 'kb-proposal kb-proposal-done' }, '✓ ' + translate('proposalHead') + ' ' + ((proposal.items || []).length) + ' ' + translate('unitCards') + ' · ' + translate('saveDone'))
           : null,
-        // 展开/收起放在卡片下方（2026-10-23 用户反馈：按钮在卡片最上方，
-        // 应该在下面 —— 用户是看完这几张才决定要不要展开的）。
-        cards.length > 3
+        // 预览先行的写入条：这些卡片还没进库，用户点一下才落盘。
+        //
+        // 2026-10-26 用户实测：agent 一次入库一个文件夹，分了 4 批（21/17/16/15）。
+        // 以前这里只渲染**最后一批**的按钮，前面几批取不到 → 用户一次只能写 16 张，
+        // 剩下的要再催一次。现在逐批都渲染，另外给一个「全部写入」。
+        saves.length
           ? h(
               'div',
-              { className: 'kb-turn-foot' },
-              h(
-                'button',
-                { className: 'kb-mini', onClick: () => setAll(!all) },
-                all
-                  ? translate('collapseAll')
-                  : translate('expandAll') + ' ' + cards.length + ' ' + translate('unitCards'),
-              ),
-            )
-          : null,
-        // 预览先行的写入条：这批卡片还没进库，用户点一下才落盘
-        save && !saveState.done
-          ? h(
-              'div',
-              { className: 'kb-save-bar' },
-              h(
-                'span',
-                { className: 'kb-save-bar-text' },
-                translate('saveBarTitle'),
-                h('b', null, ' ' + leftCount + ' '),
-                save.topicName ? h('span', { className: 'kb-save-bar-topic' }, '→ ' + save.topicName) : null,
-              ),
-              h(
-                'button',
-                { className: 'kb-vbtn primary', disabled: saveState.busy, onClick: writeNow },
-                saveState.busy
-                  ? translate('saveWriting')
-                  : translate('saveConfirm') + ' ' + leftCount + ' ' + translate('unitCards'),
-              ),
-              saveState.error ? h('span', { className: 'kb-save-err' }, saveState.error) : null,
-            )
-          : null,
-        save && saveState.done
-          ? h(
-              'div',
-              { className: 'kb-save-bar' },
-              h('span', { className: 'kb-save-ok' }, '✓ ' + translate('saveDone') + ' ' + (save.count || 0) + ' ' + translate('unitCards')),
-              save.topicName ? h('span', { className: 'kb-save-bar-topic' }, '→ ' + save.topicName) : null,
+              { className: 'kb-save-bars' },
+              saves.length > 1
+                ? h(
+                    'div',
+                    { className: 'kb-save-bar kb-save-bar-all' },
+                    h(
+                      'span',
+                      { className: 'kb-save-bar-text' },
+                      translate('saveBarTitle'),
+                      h('b', null, ' ' + totalPending + ' '),
+                      translate('unitCards'),
+                    ),
+                    h(
+                      'button',
+                      { className: 'kb-vbtn primary', disabled: anyBusy, onClick: () => writeBatch(null) },
+                      anyBusy ? translate('saveWriting') : translate('saveConfirmAll') + ' ' + totalPending + ' ' + translate('unitCards'),
+                    ),
+                  )
+                : null,
+              saves.map((batch, index) => {
+                const state = saveStates[batch.batchId] || {}
+                const left = state.left === undefined ? batch.count || 0 : state.left
+                return h(
+                  'div',
+                  { className: 'kb-save-bar' + (state.done ? ' kb-save-bar-done' : ''), key: batch.batchId },
+                  h(
+                    'span',
+                    { className: 'kb-save-bar-text' },
+                    saves.length > 1 ? translate('saveBatch') + ' ' + (index + 1) + ' · ' : '',
+                    translate('saveBarTitle'),
+                    h('b', null, ' ' + left + ' '),
+                    batch.topicName ? h('span', { className: 'kb-save-bar-topic' }, '→ ' + batch.topicName) : null,
+                  ),
+                  state.done
+                    ? h('span', { className: 'kb-save-ok' }, '✓ ' + translate('saveDone') + ' ' + (batch.count || 0) + ' ' + translate('unitCards'))
+                    : h(
+                        'button',
+                        { className: 'kb-vbtn primary', disabled: state.busy || anyBusy, onClick: () => writeBatch(batch.batchId) },
+                        state.busy ? translate('saveWriting') : translate('saveConfirm') + ' ' + left + ' ' + translate('unitCards'),
+                      ),
+                  state.error ? h('span', { className: 'kb-save-err' }, state.error) : null,
+                )
+              }),
             )
           : null,
         related.length

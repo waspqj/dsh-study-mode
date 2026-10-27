@@ -21,6 +21,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createStore, getSaveBatch, dropSaveBatch, trimSaveBatch, getProposal, dropProposal, registerSaveBatch, slugify } from './store.js'
+import { probeCompat } from './compat.js'
 import { rankDocs } from './rank.js'
 import { formatBody } from './format.js'
 import { projectCard, validateBody, buildReviewPrompt, parseReviewJson, buildAskPrompt, BODY_SOFT_LIMIT } from './card.js'
@@ -204,12 +205,44 @@ function handleOverview() {
       name: topic.name,
       description: topic.description,
       keywords: topic.keywords,
+      // 主题编辑弹窗要显示这两项：领域能改，旧名字要列出来（改完老名字仍然有效）
+      domain: topic.domain,
+      aliases: topic.aliases,
       count: topic.count,
       activeCount: topic.activeCount,
       archivedCount: Math.max(0, topic.count - topic.activeCount),
       updatedAt: topic.updatedAt,
     })),
   }
+}
+
+/**
+ * 改主题的显示信息（改名 / 改说明 / 改关键词 / 改领域）。
+ *
+ * 2026-10-26 用户要求「主题和知识卡片的名字，都可以在 ui 随意编辑」。
+ * 这条接口只改 topic.json，**不动目录名**：目录名是内部 ID，
+ * 改了它就得重写该主题下每一条 entry 的 topic 字段，还牵连会话绑定 ——
+ * 一次改名几百条数据，出错就是「卡片全丢」。改名后旧名进 aliases，
+ * 模型和旧对话按旧名依然找得到。
+ */
+function handleTopicUpdate(body) {
+  const slug = String(body.slug || body.topic || '').trim()
+  if (!slug) throw new Error('缺少主题标识')
+  const patch = {}
+  if (body.name !== undefined) patch.name = body.name
+  if (body.description !== undefined) patch.description = body.description
+  if (body.keywords !== undefined) {
+    patch.keywords = Array.isArray(body.keywords)
+      ? body.keywords
+      : String(body.keywords)
+          .split(/[,，、\s]+/)
+          .filter(Boolean)
+  }
+  if (body.domain !== undefined) patch.domain = body.domain
+  if (!Object.keys(patch).length) throw new Error('没有可更新的字段')
+  const result = store().updateTopic(slug, patch)
+  const topic = store().listTopics().find(item => item.slug === result.slug) || null
+  return { ok: true, ...result, topic }
 }
 
 function handleEntries(params) {
@@ -657,8 +690,31 @@ function handleUpdate(body) {
 // 上下文隔离：review / ask 拼给模型的提示词里只有这一张卡片（标题/正文/主题/标签），
 // 不带会话历史，也不带别的卡片。提示词拼装集中在 plugin/card.js，单测会断言这一点。
 
-/** 取一张卡片的定位信息（所在主题 + 条目）。 */
+/**
+ * 取一张卡片的定位信息（所在主题 + 条目）。
+ *
+ * 2026-10-26 用户反馈「新建卡片没有 AI 校验补充和问一下大模型的功能，
+ * 这里刚要入库不正是需要这些功能的时候吗」。
+ *
+ * 评审和追问都是**只读**操作：拼提示词只用这张卡的标题/正文/标签，
+ * 根本不需要库里有一条真条目。所以卡片还没入库时（没有 id），
+ * 允许界面把卡片内容**直接传进来**（body.card），照样能校验、照样能追问。
+ *
+ * 只有**会写库**的操作（覆盖写回、回退、核实）才必须有真条目。
+ */
 function locateCard(body) {
+  const rawId = body.id ? String(body.id).trim() : ''
+  const inline = body && body.card && typeof body.card === 'object' ? body.card : null
+  if (!rawId && inline) {
+    // 预览态卡片：库里还没有这条，但内容是齐的
+    const topic = String(inline.topic || '').trim()
+    return {
+      id: '',
+      topic,
+      entry: null,
+      card: projectCard({ ...inline, id: '' }, String(inline.topicName || topic || '')),
+    }
+  }
   const id = asId(body.id)
   const topic = body.topic ? String(body.topic).trim() : null
   const found = store().locateEntry({ id, topic })
@@ -1036,6 +1092,7 @@ const POST_ROUTES = {
   '/delete': handleDelete,
   '/add': handleAdd,
   '/update': handleUpdate,
+  '/topic/update': handleTopicUpdate,
   '/save': handleSaveBatch,
   '/propose/accept': (body, ctx) => handleProposalAccept(body, ctx),
   '/card/review': (body, ctx) => handleCardReview(ctx, body),
@@ -1083,6 +1140,10 @@ export function createHandler({ getOrigin = () => '', ctx = null } = {}) {
         if (route === '/card/versions') return sendJson(res, 200, handleCardVersions(url.searchParams))
         // 插件 AI 调用（校验/追问/重排）用哪个模型：读设置 + 可选模型目录
         if (route === '/ai-model') return sendJson(res, 200, await handleAiModelGet(ctx))
+        // 兼容报告：面板顶部据此显示「DSH 版本 / 缺了哪条宿主能力」。
+        // 单独一个接口而不是塞进 /overview —— 探针要读好几个服务，
+        // 而 /overview 是每次刷新列表都要打的，别让它每次都多探一遍。
+        if (route === '/compat') return sendJson(res, 200, probeCompat(ctx))
         return sendJson(res, 404, { error: `未知接口 ${route}` })
       }
       if (method === 'POST') {
@@ -1105,6 +1166,30 @@ export function createHandler({ getOrigin = () => '', ctx = null } = {}) {
 }
 
 export function apply(ctx) {
+  // 启动自检：缺了必需宿主能力，面板/工具就不完整。这里只写日志 ——
+  // 真正的提示在面板顶部（/kb/api/compat + 界面那行），因为日志用户不看。
+  // 注意：webServer 是硬依赖（下面 inject 里就有它），缺了根本到不了 apply，
+  // 所以这里真正可能缺的是 tools / llm / agentDefaultModel。
+  try {
+    const report = probeCompat(ctx)
+    if (!report.ok && typeof console !== 'undefined') {
+      console.warn(
+        '[learning-kb] 当前 DSH ' +
+          (report.runtime.version || '未知版本') +
+          ' 缺少必需宿主能力：' +
+          report.missing.join(', ') +
+          '（知识库面板/工具可能不完整）',
+      )
+    } else if (report.degraded.length && typeof console !== 'undefined') {
+      console.warn(
+        '[learning-kb] 降级运行：缺少 ' + report.degraded.join(', ') + '（AI 校验/追问/重排不可用，知识库读写照常）',
+      )
+    }
+  } catch (error) {
+    // 探针自己出错也不能拦着插件起来
+    if (typeof console !== 'undefined') console.warn('[learning-kb] 兼容自检异常（不影响使用）：' + String(error))
+  }
+
   const handler = createHandler({
     getOrigin: () => {
       try {

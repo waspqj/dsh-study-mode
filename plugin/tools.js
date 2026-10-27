@@ -1344,7 +1344,7 @@ export function apply(ctx) {
         cards: {
           type: 'array',
           description:
-            '一张或多张知识卡片。每张必须有 title 和 body（格式见 body 参数说明）；tags 2-5 个；kind 默认 point，问答类用 qa 并把问题原文放进 q；source 写 {type, ref, locator}；verified/appliesTo 写核实状态与适用范围。',
+            '一张或多张知识卡片。**不设条数上限**：整理出一个文件夹可能有几十上百条，能一次给就一次给；工具调用太长会被截断时才分批，且分批要在同一轮里把剩下的批次连续出完，别停下等用户催（2026-10-26 用户实测：分 4 批出，用户只写进去最后一批的 16 条）。每张必须有 title 和 body（格式见 body 参数说明）；tags 2-5 个；kind 默认 point，问答类用 qa 并把问题原文放进 q；source 写 {type, ref, locator}；verified/appliesTo 写核实状态与适用范围。',
           items: {
             type: 'object',
             properties: {

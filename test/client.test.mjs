@@ -116,6 +116,27 @@ function makeReact() {
         pending.push({ frame, index, fn })
       }
     },
+    /**
+     * useLayoutEffect：真实 React 里在**绘制前**同步跑。
+     *
+     * 界面用它来「保持视口」——展开更多卡片时把滚动位置还原回去，
+     * 否则用户点一下就被弹到底部（2026-10-26 用户反馈）。
+     * 这个替身里跟 useEffect 一样入队（渲染后执行），效果上够用。
+     */
+    useLayoutEffect(fn, deps) {
+      const frame = currentFrame
+      const index = slot()
+      const previous = frame.deps[index]
+      const changed =
+        !previous ||
+        !deps ||
+        previous.length !== deps.length ||
+        deps.some((dep, position) => !Object.is(dep, previous[position]))
+      if (changed) {
+        frame.deps[index] = deps
+        pending.push({ frame, index, fn })
+      }
+    },
   }
 
   function reset() {
@@ -324,6 +345,12 @@ const fixtures = {
 }
 
 const okJson = (data) => ({ ok: true, status: 200, json: async () => data })
+/** 宿主返回错误：状态码非 200，json() 里带 error 字符串 */
+const errJson = (error, status = 400) => ({
+  ok: false,
+  status,
+  json: async () => ({ ok: false, error }),
+})
 
 /** /entries 返回的列表：用例可以换成「正文被截断」的版本（审计 P1-8） */
 let currentEntries = null
@@ -341,10 +368,37 @@ let currentModel = 'deepseek-flash'
 let currentStoreVersion = 2
 /** /ai-model 的设置：模型选择器用例会改它 */
 let currentAiModel = { mode: 'session', provider: null, model: null, reasoningEffort: null }
+/**
+ * /compat 的宿主兼容报告：用例可调。
+ * 默认是「一切正常」—— 正常时界面一个字都不该多显示，所以默认值必须覆盖这个形状。
+ */
+let currentCompat = {
+  ok: true,
+  missing: [],
+  degraded: [],
+  runtime: { version: '0.2.1-rc.3', commit: 'be72761' },
+  checks: [],
+}
 const reviewIssues = () => currentIssues
+/** window.scrollTo 的调用记录：翻页后要还原视口（不然用户点一下就跳到底部） */
+const scrollCalls = []
+/**
+ * 待写入批次里的卡片（batchId → 卡片列表）。
+ *
+ * /save 的 mock 靠它拼出带 id 的写入计划：真实宿主写完会返回每条的 id，
+ * 界面用这个 id 把预览卡「解锁」（评审 / 编辑 / 问一下）。
+ */
+const savedBatches = {}
 
 const sandbox = {
   window: {
+    scrollX: 0,
+    scrollY: 1200,
+    scrollTo(x, y) {
+      scrollCalls.push({ x, y })
+      this.scrollX = x
+      this.scrollY = y
+    },
     __ModuleLoader__: {
       load(meta) {
         loaded = meta
@@ -400,6 +454,66 @@ const sandbox = {
             defaultEffort: null,
           },
         ],
+      })
+    }
+    // 宿主兼容报告：面板顶部那行提示的数据源
+    if (route.endsWith('/compat')) return okJson(currentCompat)
+    // 改名主题（2026-10-26 用户要求：主题名/卡片名都能在 ui 随便改）
+    if (route.endsWith('/topic/update')) {
+      const payload = JSON.parse(options.body || '{}')
+      const slug = payload.slug
+      const topic = fixtures.overview.topics.find(item => item.slug === slug)
+      if (!topic) return errJson('主题「' + slug + '」不存在')
+      topic.name = payload.name || topic.name
+      topic.description = payload.description || ''
+      topic.keywords = payload.keywords || []
+      topic.domain = payload.domain || ''
+      topic.aliases = (topic.aliases || []).concat(topic.name !== payload.name ? [topic.name] : [])
+      return okJson({
+        ok: true,
+        slug,
+        name: topic.name,
+        renamed: true,
+        topic: { ...topic },
+      })
+    }
+    // 改卡片标题
+    if (route.endsWith('/update')) {
+      const payload = JSON.parse(options.body || '{}')
+      const fields = payload.fields || {}
+      if (fields.title !== undefined && !String(fields.title).trim()) {
+        return errJson('标题不能为空')
+      }
+      const entry = fixtures.entries.entries.find(item => item.id === payload.id)
+      if (!entry) return errJson('找不到条目')
+      if (fields.title !== undefined) entry.title = fields.title
+      return okJson({ ok: true, id: entry.id, topic: entry.topic, title: entry.title, version: 99 })
+    }
+    // 写入确认：返回带 id 的写入计划。
+    //
+    // 真实宿主返回的 plan 里每条都有 id（写进库了）—— 界面靠它把预览卡的 id 补回来，
+    // 补回来之后卡片才有「AI 校验补充 / 编辑 / 问一下」（2026-10-26 用户反馈）。
+    if (route.endsWith('/save')) {
+      const payload = JSON.parse(options.body || '{}')
+      const batch = String(payload.batchId || '')
+      const cards = savedBatches[batch] || []
+      const wanted = Array.isArray(payload.titles) && payload.titles.length ? payload.titles : null
+      const picked = wanted ? cards.filter(card => wanted.includes(card.title)) : cards
+      const plan = picked.map((card, index) => ({
+        title: card.title,
+        id: card.id || 'k_' + batch + '_' + index,
+        version: 900 + index,
+        action: 'create',
+      }))
+      const remaining = wanted ? cards.length - picked.length : 0
+      return okJson({
+        ok: true,
+        status: 'written',
+        topic: 'mysql-进阶',
+        total: 100,
+        written: picked.length,
+        remaining,
+        plan,
       })
     }
     // 单条详情：列表只给摘要，正文全文在这里取（审计 P1-8）
@@ -678,6 +792,165 @@ await check('未核实条目才出现「未核实」角标', async () => {
   assert.match(html, /未核实/)
   fixtures.entries.entries[0].verified = true
   await run(Panel, {})
+})
+
+console.log('宿主兼容提示')
+await check('一切正常 → 不出现提示条（日常使用零噪音）', async () => {
+  currentCompat = {
+    ok: true,
+    missing: [],
+    degraded: [],
+    runtime: { version: '0.2.1-rc.3', commit: 'be72761' },
+    checks: [],
+  }
+  forget()
+  const { html } = await run(Panel, {})
+  assert.ok(!html.includes('kb-compat'), '能力齐全时不该渲染兼容提示条')
+})
+
+await check('缺必需能力 → 红色提示条，写明缺哪条和 DSH 版本', async () => {
+  currentCompat = {
+    ok: false,
+    missing: ['tools.register'],
+    degraded: [],
+    runtime: { version: '0.2.1-rc.3', commit: 'be72761' },
+    checks: [{ id: 'tools.register', label: 'tools 工具注册（learn_* 五个工具）', required: true, ok: false }],
+  }
+  forget()
+  const { html } = await run(Panel, {})
+  assert.match(html, /kb-compat/, '缺必需能力却没提示')
+  assert.match(html, /kb-compat fatal/, '缺必需能力应是红色（fatal）')
+  assert.match(html, /DSH 0\.2\.1-rc\.3/)
+  assert.match(html, /tools\.register/)
+  assert.match(html, /路由或工具可能不工作/)
+})
+
+await check('只是降级 → 黄色提示条，说明知识库读写照常', async () => {
+  currentCompat = {
+    ok: true,
+    missing: [],
+    degraded: ['llm'],
+    runtime: { version: '0.2.1-rc.3', commit: 'be72761' },
+    checks: [{ id: 'llm', label: 'llm 模型调用', required: false, ok: false }],
+  }
+  forget()
+  const { html } = await run(Panel, {})
+  assert.match(html, /kb-compat/, '降级时也该给个提示')
+  assert.ok(!/kb-compat fatal/.test(html), '只是降级不该用红色')
+  assert.match(html, /读写知识库照常/)
+})
+
+await check('拿不到 /compat（老宿主没这接口）→ 不提示也不报错', async () => {
+  // 把接口弄成 404：面板应静默跳过，行为与加这个功能之前一致
+  const original = currentCompat
+  currentCompat = null
+  const savedFetch = sandbox.fetch
+  sandbox.fetch = async (url, options = {}) => {
+    if (String(url).includes('/compat')) throw new Error('HTTP 404')
+    return savedFetch(url, options)
+  }
+  try {
+    forget()
+    const { html } = await run(Panel, {})
+    assert.ok(!html.includes('kb-compat'), '接口拿不到时不该冒出提示条')
+    assert.match(html, /学习知识库/, '面板其余部分应照常渲染')
+  } finally {
+    sandbox.fetch = savedFetch
+    currentCompat = original
+  }
+})
+
+console.log('改名入口（2026-10-26：主题名/卡片名都能在 ui 随便改）')
+await check('左侧主题栏每行都有改名按钮', async () => {
+  forget()
+  const { tree } = await run(Panel, {})
+  const edit = find(tree, node => node.tag === 'button' && node.props.className === 'kb-topic-edit')
+  assert.ok(edit, '主题行上找不到改名按钮')
+  assert.equal(edit.props['aria-label'], '编辑主题')
+})
+
+await check('点改名 → 弹出编辑框，名字/说明/关键词/领域都能改', async () => {
+  forget()
+  const first = await run(Panel, {})
+  const edit = find(
+    first.tree,
+    node => node.tag === 'button' && node.props.className === 'kb-topic-edit',
+  )
+  edit.props.onClick()
+  const second = await run(Panel, {})
+  assert.match(second.html, /编辑主题/, '编辑弹窗没打开')
+  const nameInput = find(
+    second.tree,
+    node => node.tag === 'input' && node.props.value === 'MySQL 进阶',
+  )
+  assert.ok(nameInput, '弹窗里没有主题名字输入框')
+  assert.ok(
+    find(second.tree, node => node.tag === 'textarea'),
+    '弹窗里没有主题说明输入框',
+  )
+  // 关键词与领域：说明文字要在弹窗里出现
+  const labels = findAll(second.tree, node => node.tag === 'label').map(node => textOf(node))
+  assert.ok(labels.some(text => text.includes('关键词')), '没有关键词输入项')
+  assert.ok(labels.some(text => text.includes('所属领域')), '没有领域输入项')
+})
+
+await check('改完名字保存 → 打到 /topic/update 并刷新', async () => {
+  forget()
+  const first = await run(Panel, {})
+  find(first.tree, node => node.tag === 'button' && node.props.className === 'kb-topic-edit').props.onClick()
+  const second = await run(Panel, {})
+  const nameInput = find(
+    second.tree,
+    node => node.tag === 'input' && node.props.value === 'MySQL 进阶',
+  )
+  nameInput.props.onChange({ target: { value: '数据库专题' } })
+  calls.length = 0
+  const third = await run(Panel, {})
+  const save = find(
+    third.tree,
+    node => node.tag === 'button' && String(node.props.className || '').includes('primary') && textOf(node).trim() === '保存',
+  )
+  assert.ok(save, '找不到保存按钮')
+  await save.props.onClick()
+  const call = calls.find(item => String(item.url).includes('/topic/update'))
+  assert.ok(call, '没有调用 /topic/update')
+  assert.match(JSON.stringify(call.body || {}), /数据库专题/)
+})
+
+await check('卡片详情里能改名', async () => {
+  forget()
+  const first = await run(Panel, {})
+  const card = find(
+    first.tree,
+    node => node.tag === 'article' && String(node.props.className || '').includes('kb-card'),
+  )
+  assert.ok(card, '列表里没有卡片')
+  card.props.onClick()
+  const second = await run(Panel, {})
+  const renameBtn = find(
+    second.tree,
+    node => node.tag === 'button' && node.props.className === 'kb-rename-btn',
+  )
+  assert.ok(renameBtn, '详情浮层里没有改名按钮')
+  renameBtn.props.onClick()
+  const third = await run(Panel, {})
+  const titleInput = find(
+    third.tree,
+    node => node.tag === 'input' && String(node.props.placeholder || '').includes('卡片标题'),
+  )
+  assert.ok(titleInput, '改名后没有出现标题输入框')
+  titleInput.props.onChange({ target: { value: '改过的标题' } })
+  calls.length = 0
+  const fourth = await run(Panel, {})
+  const save = find(
+    fourth.tree,
+    node => node.tag === 'button' && String(node.props.className || '').includes('primary') && textOf(node).trim() === '保存',
+  )
+  assert.ok(save, '改名框里找不到保存按钮')
+  await save.props.onClick()
+  const call = calls.find(item => String(item.url).endsWith('/update'))
+  assert.ok(call, '没有调用 /update')
+  assert.match(JSON.stringify(call.body || {}), /改过的标题/)
 })
 
 console.log('搜索')
@@ -1801,27 +2074,58 @@ await check('卡片头上有角色徽章（库中已有）', async () => {
 
 // 2026-10-23 用户反馈：「有多个卡片的时候需要展开，这个按键在卡片最上方，
 // 应当在最下方合理一点」—— 用户是看完这几张才决定要不要展开的。
-await check('「展开全部」在卡片下方，不在最上方', async () => {
-  const many = Array.from({ length: 6 }, (_, i) => ({ ...oneCard, id: 'k_m' + i, title: '卡片 ' + i }))
+//
+// 2026-10-26 改版：这个按钮从「展开全部 N 条」换成每组独立的「再看 N 条」。
+// 原因：老按钮是一个全局开关，点一下把所有组的卡片一口气全铺开；
+// 而且折叠时每组只渲染 3 张，其余的连 DOM 都不在，点都点不到。
+await check('翻页按钮在卡片下方，不在最上方', async () => {
+  const many = Array.from({ length: 26 }, (_, i) => ({ ...oneCard, id: 'k_m' + i, title: '卡片 ' + i, role: 'existing' }))
   const view = await run(turnTailReg.Component, { turn: turnOf([{ seq: 12, cards: many }], 20), seq: 20 })
   const head = find(view.tree, (node) => node.props && node.props.className === 'kb-stack-head kb-turn-head')
   assert.ok(head, '找不到标题行')
-  assert.equal(find(head, (node) => node.tag === 'button'), null, '展开按钮不该在头顶')
+  assert.equal(find(head, (node) => node.tag === 'button'), null, '翻页按钮不该在头顶')
   const foot = find(view.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
   assert.ok(foot, '底部缺 kb-turn-foot 行')
-  assert.ok(findButton(foot, '展开全部 6 条'), '展开按钮要在卡片下方')
+  assert.ok(findButton(foot, '再看 10 条'), '翻页按钮要在卡片下方')
 })
 
-await check('点底部的「展开全部」→ 六张全出来，按钮变「收起」', async () => {
-  const many = Array.from({ length: 6 }, (_, i) => ({ ...oneCard, id: 'k_m' + i, title: '卡片 ' + i }))
+await check('折叠时每组只摆 10 张，其余的连 DOM 都不在（点都点不到）', async () => {
+  const many = Array.from({ length: 26 }, (_, i) => ({ ...oneCard, id: 'k_p' + i, title: '折叠卡 ' + i, role: 'new' }))
+  const view = await run(turnTailReg.Component, { turn: turnOf([{ seq: 12, cards: many }], 20), seq: 20 })
+  const titles = findAll(view.tree, (node) => node.tag === 'span' && String(node.props.className || '').includes('kb-mini-title'))
+  assert.equal(titles.length, 10, '折叠时每组只该摆 10 张')
+  assert.ok(!view.html.includes('折叠卡 25'), '没摆出来的卡不该出现在 DOM 里')
+})
+
+await check('点「再看 N 条」→ 每次多摆 10 张，不是全铺开', async () => {
+  const many = Array.from({ length: 26 }, (_, i) => ({ ...oneCard, id: 'k_q' + i, title: '翻页卡 ' + i, role: 'update' }))
   const props = { turn: turnOf([{ seq: 12, cards: many }], 20), seq: 20 }
   const view = await run(turnTailReg.Component, props)
   const foot = find(view.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
-  await findButton(foot, '展开全部 6 条').props.onClick()
+  await findButton(foot, '再看 10 条').props.onClick()
   const after = await run(turnTailReg.Component, props)
-  assert.match(after.html, /卡片 5/, '展开后最后一张也要出来')
-  const footAfter = find(after.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
-  assert.ok(findButton(footAfter, '收起'), '展开后按钮要变「收起」，而且还在底部')
+  const titles = findAll(after.tree, (node) => node.tag === 'span' && String(node.props.className || '').includes('kb-mini-title'))
+  assert.equal(titles.length, 20, '翻一页应该多摆 10 张（不是全铺开）')
+  assert.ok(!after.html.includes('翻页卡 25'), '还没翻到的卡不该出现')
+  // 再翻一次到 26 张，按钮就该消失
+  const foot2 = find(after.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
+  await findButton(foot2, '再看 6 条').props.onClick()
+  const full = await run(turnTailReg.Component, props)
+  const titles2 = findAll(full.tree, (node) => node.tag === 'span' && String(node.props.className || '').includes('kb-mini-title'))
+  assert.equal(titles2.length, 26, '翻到底应该全部出来')
+  assert.equal(find(full.tree, (node) => node.props && node.props.className === 'kb-turn-foot'), null, '全出来了就不用再有翻页按钮')
+})
+
+await check('翻页时保持视口：点之前记 scrollY，渲染后还原', async () => {
+  const many = Array.from({ length: 26 }, (_, i) => ({ ...oneCard, id: 'k_r' + i, title: '视口卡 ' + i, role: 'preview' }))
+  const props = { turn: turnOf([{ seq: 12, cards: many }], 20), seq: 20 }
+  const before = await run(turnTailReg.Component, props)
+  const foot = find(before.tree, (node) => node.props && node.props.className === 'kb-turn-foot')
+  await findButton(foot, '再看 10 条').props.onClick()
+  const after = await run(turnTailReg.Component, props)
+  assert.ok(after.html, '翻页后要正常渲染')
+  // scrollTo 被调用过 → 视口被还原，不会跳到底部
+  assert.ok(scrollCalls.length > 0, '翻页后没有还原滚动位置：用户点一下就会跳到底部')
 })
 
 const newCard = {
@@ -1848,7 +2152,13 @@ await check('不同角色的卡片分组显示，不混排', async () => {
   assert.match(view.html, /kb-role-new/, '新卡片要带 new 角色类名')
 })
 
-await check('没有 id 的预览卡不给「评审 / 编辑 / 问一下」', async () => {
+// 2026-10-26 用户反馈：「新建卡片没有 ai 校验补充和问一下大模型的功能，
+// 这里刚要入库不正是需要这些功能的时候吗」—— 所以规则反过来了：
+//
+//   预览卡（还没进库）：**校验和追问要给**。这俩是只读操作，
+//   把卡片内容直接传过去就能做，库里有没有这条条目无所谓。
+//   「编辑」（覆盖写回）不给 —— 库里还没这条，没地方可写。
+await check('预览卡（没 id）：给「校验 / 问一下」，不给「编辑」', async () => {
   const props = { turn: turnOf([{ seq: 12, cards: [newCard] }], 20), seq: 20 }
   // 先展开（收起态本来就只显示一行，谈不上有没有动作）
   const first = await run(turnTailReg.Component, props)
@@ -1856,10 +2166,27 @@ await check('没有 id 的预览卡不给「评审 / 编辑 / 问一下」', asy
   assert.ok(mini, '找不到小预览')
   await mini.props.onClick()
   const view = await run(turnTailReg.Component, props)
-  assert.ok(!findButton(view.tree, 'AI 校验补充'), '预览卡不该有可写库的动作')
-  assert.ok(!findButton(view.tree, '编辑'), '预览卡不该有可写库的动作')
-  assert.ok(!findButton(view.tree, '问一下'), '预览卡不该有可写库的动作')
-  assert.match(view.html, /还没进库/, '要说明这张卡还没进库')
+  assert.ok(findButton(view.tree, 'AI 校验补充'), '预览卡应该能校验：入库前正是最需要它的时候')
+  assert.ok(findButton(view.tree, '问一下'), '预览卡应该能追问')
+  assert.ok(!findButton(view.tree, '编辑'), '预览卡不该有「覆盖写回」：库里还没这条，没地方可写')
+})
+
+await check('预览卡的校验请求把卡片内容直接带过去（不靠库里的 id）', async () => {
+  forget()
+  const props = { turn: turnOf([{ seq: 12, cards: [newCard] }], 20), seq: 20 }
+  const first = await run(turnTailReg.Component, props)
+  const mini = find(first.tree, (node) => node.props && String(node.props.className || '').includes('kb-mini-card'))
+  await mini.props.onClick()
+  const view = await run(turnTailReg.Component, props)
+  const before = calls.length
+  await findButton(view.tree, 'AI 校验补充').props.onClick()
+  await sleep(30) // 等校验请求发出去
+  await run(turnTailReg.Component, props)
+  const posted = calls.slice(before).find(call => String(call.url).endsWith('/kb/api/card/review'))
+  assert.ok(posted, '应调 /kb/api/card/review')
+  assert.ok(posted.body.card, '预览卡的校验请求要带上卡片内容')
+  assert.equal(posted.body.card.title, newCard.title)
+  assert.match(String(posted.body.card.body), /独占所有权/)
 })
 
 await check('提议条：标题+理由摆出来，点「同意」出预览，再点「确认写入」', async () => {
@@ -1994,6 +2321,84 @@ await check('有待写入批次时出现「确认写入 N 条」按钮', async (
   assert.match(view.html, /这批卡片还没进库/, '要说明这批还没进库')
 })
 
+// 2026-10-26 用户实测：agent 一次入库一个文件夹，分了 4 批（21/17/16/15）。
+// 以前界面只渲染**最后一批**的「确认写入」按钮 → 用户一次只能写 16 张，
+// 剩下 53 张要再催一次才写进去。
+await check('同一轮多个待写入批次：每批都要有自己的「确认写入」按钮', async () => {
+  forget()
+  const batchCards = (prefix, n) => Array.from({ length: n }, (_, i) => ({ ...newCard, title: prefix + i }))
+  const props = {
+    turn: turnOf(
+      [
+        { seq: 12, cards: batchCards('甲', 21), save: { batchId: 'b_a', count: 21, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } },
+        { seq: 13, cards: batchCards('乙', 17), save: { batchId: 'b_b', count: 17, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } },
+        { seq: 14, cards: batchCards('丙', 16), save: { batchId: 'b_c', count: 16, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } },
+      ],
+      20,
+    ),
+    seq: 20,
+  }
+  const view = await run(turnTailReg.Component, props)
+  assert.ok(findButton(view.tree, '确认写入 21 条'), '第一批 21 条的按钮不见了')
+  assert.ok(findButton(view.tree, '确认写入 17 条'), '第二批 17 条的按钮不见了')
+  assert.ok(findButton(view.tree, '确认写入 16 条'), '第三批 16 条的按钮不见了')
+  // 还有「全部写入」：一次把几批都写掉，不用一批一批点
+  assert.ok(findButton(view.tree, '全部写入 54 条'), '缺「全部写入」按钮')
+})
+
+await check('「全部写入」把每一批都 POST 一次', async () => {
+  forget()
+  const batchCards = (prefix, n) => Array.from({ length: n }, (_, i) => ({ ...newCard, title: prefix + i }))
+  const props = {
+    turn: turnOf(
+      [
+        { seq: 12, cards: batchCards('丁', 2), save: { batchId: 'b_d', count: 2, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } },
+        { seq: 13, cards: batchCards('戊', 2), save: { batchId: 'b_e', count: 2, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } },
+      ],
+      20,
+    ),
+    seq: 20,
+  }
+  const view = await run(turnTailReg.Component, props)
+  const before = calls.length
+  await findButton(view.tree, '全部写入 4 条').props.onClick()
+  const posted = calls.slice(before).filter(call => String(call.url).endsWith('/kb/api/save'))
+  assert.equal(posted.length, 2, '两个批次都要提交')
+  assert.deepEqual(posted.map(call => call.body.batchId).sort(), ['b_d', 'b_e'])
+})
+
+await check('写入成功后把 id 补回卡片 → 才有「AI 校验补充 / 问一下」', async () => {
+  forget()
+  // 这批卡片在库里还没有条目：预览态故意不给 id
+  const preview = { ...newCard, id: null, title: '刚入库的卡', body: '正文' }
+  savedBatches.b_back = [{ title: '刚入库的卡', id: 'k_real_1' }]
+  const props = {
+    turn: turnOf([{ seq: 12, cards: [preview], save: { batchId: 'b_back', count: 1, topic: 'mysql-进阶', topicName: 'MySQL 进阶' } }], 20),
+    seq: 20,
+  }
+  let view = await run(turnTailReg.Component, props)
+  // 先点开卡片看看有没有动作
+  const mini = find(view.tree, item => item.props && String(item.props.className || '').includes('kb-mini-card'))
+  await mini.props.onClick()
+  view = await run(turnTailReg.Component, props)
+  // 还没进库：校验/追问有（只读），覆盖写回没有（没地方可写）
+  assert.ok(findButton(view.tree, 'AI 校验补充'), '预览阶段就该能校验')
+  assert.ok(!findButton(view.tree, '编辑'), '还没进库时不该有「覆盖写回」')
+  // 写入
+  const before = calls.length
+  await findButton(view.tree, '确认写入 1 条').props.onClick()
+  const posted = calls.slice(before).find(call => String(call.url).endsWith('/kb/api/save'))
+  assert.ok(posted, '应调 /kb/api/save')
+  view = await run(turnTailReg.Component, props)
+  // 写入后：卡片拿到真 id → 「覆盖写回 / 编辑」也解锁了
+  const mini2 = find(view.tree, item => item.props && String(item.props.className || '').includes('kb-mini-card'))
+  if (mini2) await mini2.props.onClick()
+  view = await run(turnTailReg.Component, props)
+  assert.ok(findButton(view.tree, 'AI 校验补充'), '写入成功后卡片还是不能用「AI 校验补充」')
+  assert.ok(findButton(view.tree, '问一下'), '写入成功后卡片还是不能用「问一下」')
+  assert.ok(findButton(view.tree, '编辑'), '写入成功后应该解锁「编辑」：这说明 id 已经补回来了')
+})
+
 await check('点「确认写入」会 POST /kb/api/save，写完显示已写入', async () => {
   forget() // 丢掉上一条用例留下的状态（已写入），从干净状态开始
   const props = {
@@ -2056,6 +2461,31 @@ await check('宿主没重启时点「确认写入」会说清要重启，不甩�
   sandbox.fetch = originalFetch
   const after = await run(turnTailReg.Component, props)
   assert.match(after.html, /重启 DSH/, '要说清要重启 DSH')
+})
+
+await check('宿主还是旧代码（预览卡回「缺少条目 id」）→ 也要说清要重启', async () => {
+  forget()
+  reviewCacheClear() // 清掉上一条用例的校验缓存，否则会命中缓存压根不请求
+  const props = { turn: turnOf([{ seq: 12, cards: [newCard] }], 20), seq: 20 }
+  const first = await run(turnTailReg.Component, props)
+  const mini = find(first.tree, item => item.props && String(item.props.className || '').includes('kb-mini-card'))
+  await mini.props.onClick()
+  const view = await run(turnTailReg.Component, props)
+  const originalFetch = sandbox.fetch
+  sandbox.fetch = async (url, options = {}) => {
+    // 旧宿主不认「内联卡片」，找不到条目就报这个
+    if (String(url).endsWith('/kb/api/card/review')) {
+      return { ok: false, status: 400, json: async () => ({ error: '缺少条目 id' }) }
+    }
+    return originalFetch(url, options)
+  }
+  await findButton(view.tree, 'AI 校验补充').props.onClick()
+  await sleep(30)
+  // 注意：mock 要一直挂到渲染结束 —— 请求是渲染时（effect 里）发出去的，
+  // 提前还原就换成正常 mock 了，测不到这条分支
+  const after = await run(turnTailReg.Component, props)
+  sandbox.fetch = originalFetch
+  assert.match(after.html, /重启 DSH/, '宿主没更新时要说清要重启，别让用户以为卡片坏了')
 })
 
 console.log('AI 校验面板')

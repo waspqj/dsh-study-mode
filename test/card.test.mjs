@@ -567,5 +567,152 @@ await check('POST /ai-model 给个残缺设置要 400，不能存半截', async 
   assert.match(res.json.error, /必须同时给出/)
 })
 
+// ---------------------------------------------------------------- 改名接口
+// 2026-10-26 用户要求「主题和知识卡片的名字，都可以在 ui 随意编辑」。
+console.log('改名：主题 / 卡片')
+await check('POST /topic/update 改主题名：卡片不丢，旧名进别名', async () => {
+  const slug = store.createTopic('改名主题', { description: '改名前的说明' })
+  store.planSave({ topic: slug, cards: [{ title: '卡片甲', body: '正文甲' }], dryRun: false })
+  const res = await post('/topic/update', {
+    slug,
+    name: '改名后的主题',
+    description: '改名后的说明',
+    keywords: ['甲', '乙'],
+    domain: '测试域',
+  })
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.equal(res.json.slug, slug, 'slug 是内部 ID，不该变')
+  assert.equal(res.json.name, '改名后的主题')
+  assert.equal(res.json.renamed, true)
+  assert.deepEqual(res.json.topic.aliases, ['改名主题'])
+  assert.equal(res.json.topic.description, '改名后的说明')
+  assert.deepEqual(res.json.topic.keywords, ['甲', '乙'])
+  assert.equal(res.json.topic.domain, '测试域')
+  const entries = store.listEntries({ topic: slug }).entries
+  assert.equal(entries.length, 1, '改名不能丢卡片')
+  assert.equal(entries[0].title, '卡片甲')
+})
+
+await check('GET /overview 要带上领域和旧名字（编辑弹窗要显示）', async () => {
+  const slug = store.createTopic('概览主题')
+  await post('/topic/update', { slug, name: '概览主题改名', domain: '某领域' })
+  const res = await get('/overview')
+  const topic = res.json.topics.find(item => item.slug === slug)
+  assert.ok(topic, '主题要出现在列表里')
+  assert.equal(topic.domain, '某领域')
+  assert.ok(Array.isArray(topic.aliases), '旧名字要能给界面显示')
+  assert.ok(topic.aliases.includes('概览主题'))
+})
+
+await check('POST /topic/update 缺参数要报错', async () => {
+  const res = await post('/topic/update', {})
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /缺少主题标识/)
+})
+
+await check('POST /topic/update 改不存在的主题要报错', async () => {
+  const res = await post('/topic/update', { slug: '压根不存在的主题', name: 'x' })
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /不存在/)
+})
+
+await check('POST /update 改卡片标题：标题变了、正文没动', async () => {
+  const slug = store.createTopic('卡片改名主题')
+  const saved = store.planSave({
+    topic: slug,
+    cards: [{ title: '旧标题', body: '正文不动' }],
+    dryRun: false,
+  })
+  const id = saved.plan[0].id
+  const res = await post('/update', { id, topic: slug, fields: { title: '新标题' } })
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.equal(res.json.title, '新标题')
+  const entry = store.locateEntry({ id, topic: slug }).entry
+  assert.equal(entry.title, '新标题')
+  assert.equal(entry.body, '正文不动', '改名不该动正文')
+})
+
+await check('POST /update 标题为空要报错', async () => {
+  const slug = store.createTopic('空标题主题')
+  const saved = store.planSave({ topic: slug, cards: [{ title: '有标题', body: 'x' }], dryRun: false })
+  const res = await post('/update', { id: saved.plan[0].id, topic: slug, fields: { title: '   ' } })
+  // 空标题要挡住：卡片没名字在列表里没法看
+  assert.ok(res.statusCode >= 400, '空标题应该被拒绝')
+})
+
+// ---------------------------------------------------------------- 预览卡片（还没入库）
+// 2026-10-26 用户反馈：「新建卡片没有 ai 校验补充和问一下大模型的功能，
+// 这里刚要入库不正是需要这些功能的时候吗」。
+//
+// 评审和追问都是**只读**操作：提示词只用这张卡的标题/正文/标签，
+// 库里有没有这条条目无所谓 → 允许把卡片内容直接传进来。
+console.log('预览卡片（还没入库）也能校验 / 追问')
+// llm.stream 的入参里，正文在 messages[0].content[0].text
+const promptOf = (call) => String((call && call.messages && call.messages[0] && call.messages[0].content && call.messages[0].content[0] && call.messages[0].content[0].text) || '')
+await check('POST /card/review 传内联卡片（没有 id）→ 能校验', async () => {
+  const before = calls.length
+  const res = await post('/card/review', {
+    card: {
+      title: '还没入库的卡',
+      body: '首行结论：这是一条还没写进库的知识。\n- 要点一',
+      topic: 'mysql-进阶',
+      topicName: 'MySQL 进阶',
+      tags: ['预览'],
+      kind: 'point',
+    },
+    mode: 'both',
+  })
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.ok(calls.length > before, '应该真的调了模型')
+  // 提示词里要能看到这张卡的内容
+  const prompt = promptOf(calls[calls.length - 1])
+  assert.match(prompt, /还没入库的卡/, '提示词里要有卡片标题')
+  assert.match(prompt, /这是一条还没写进库的知识/, '提示词里要有卡片正文')
+})
+
+await check('POST /card/ask 传内联卡片（没有 id）→ 能追问', async () => {
+  const before = calls.length
+  const res = await post('/card/ask', {
+    card: {
+      title: '还没入库的卡',
+      body: '首行结论：这是一条还没写进库的知识。\n- 要点一',
+      topic: 'mysql-进阶',
+      topicName: 'MySQL 进阶',
+      tags: ['预览'],
+    },
+    question: '这条讲的是啥？',
+  })
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.ok(calls.length > before, '应该真的调了模型')
+  const prompt = promptOf(calls[calls.length - 1])
+  assert.match(prompt, /还没入库的卡/)
+  assert.match(prompt, /这条讲的是啥/, '问题要进提示词')
+})
+
+await check('没有 id 也没有内联卡片 → 报错要说清', async () => {
+  const res = await post('/card/review', { mode: 'both' })
+  assert.ok(res.statusCode >= 400, '应该报错')
+})
+
+await check('有 id 时仍然走库里那条（内联卡片不抢）', async () => {
+  const slug = store.createTopic('内联不抢主题')
+  const saved = store.planSave({ topic: slug, cards: [{ title: '库里那条', body: '库里的正文' }], dryRun: false })
+  const id = saved.plan[0].id
+  const res = await post('/card/review', {
+    id,
+    topic: slug,
+    card: { title: '传进来的假卡片', body: '假正文' },
+    mode: 'both',
+  })
+  assert.equal(res.statusCode, 200)
+  const prompt = promptOf(calls[calls.length - 1])
+  assert.match(prompt, /库里那条/, '有 id 就该用库里那条')
+  assert.ok(!prompt.includes('传进来的假卡片'), '有 id 时不能被内联卡片顶掉')
+})
+
 fs.rmSync(root, { recursive: true, force: true })
 console.log(`\n${passed} 项断言通过`)
