@@ -604,9 +604,41 @@ if (!toolsSource.includes('kbTokens')) {
   }
 }
 
+// 7. CHANGELOG 必须跟版本对得上（2026-10-27 用户要求：每次发布都要更新更新日志）
+//
+//    放在 check.mjs 里，是因为它是发布流程的**闸门**：
+//    没更新 CHANGELOG → 自检不过 → 发布会停在这一步，而不是发出去一个
+//    「没有更新日志」的版本。以后 commit message、tag 说明、npm 更新日志
+//    都从 CHANGELOG 的同一节生成（scripts/release-notes.mjs），保证三处一致。
+{
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+  const changelogPath = path.join(root, 'CHANGELOG.md')
+  if (!fs.existsSync(changelogPath)) {
+    fail('缺 CHANGELOG.md：每次发布都要更新它（用户明确要求）')
+  } else {
+    const text = fs.readFileSync(changelogPath, 'utf8')
+    const head = new RegExp(`^##\\s+${pkg.version.replace(/\./g, '\\.')}\\s+—\\s+\\d{4}-\\d{2}-\\d{2}\\s*$`, 'm')
+    if (!head.test(text)) {
+      fail(`CHANGELOG.md 里没有 ${pkg.version} 这一节：每次发布都要在顶部补一节（用户明确要求）`)
+    } else {
+      // 这一节至少要有「用户能感知到的变化」和「怎么验的」两段
+      const start = text.search(head)
+      const rest = text.slice(start).split('\n').slice(1)
+      const end = rest.findIndex(line => /^##\s+/.test(line))
+      const body = (end < 0 ? rest : rest.slice(0, end)).join('\n')
+      if (!/###\s+用户能感知到的变化/.test(body)) {
+        fail(`CHANGELOG.md 的 ${pkg.version} 一节缺「### 用户能感知到的变化」：这一节是给用户看的更新日志`)
+      }
+      if (!/###\s+怎么验的/.test(body)) {
+        fail(`CHANGELOG.md 的 ${pkg.version} 一节缺「### 怎么验的」：要写清这次怎么验证的`)
+      }
+    }
+  }
+}
+
 if (problems.length) {
   console.error('自检未通过：')
   for (const problem of problems) console.error('  - ' + problem)
   process.exit(1)
 }
-console.log('自检通过：插件可加载且导出正确、工具参数是标准 JSON Schema、persona 关键规则齐全、工具无重复挂载、知识库 UI 三处接线一致、跨版本兼容探针接线完整、改名能力接线完整、入库批次与展开体验接线完整。')
+console.log('自检通过：插件可加载且导出正确、工具参数是标准 JSON Schema、persona 关键规则齐全、工具无重复挂载、知识库 UI 三处接线一致、跨版本兼容探针接线完整、改名能力接线完整、入库批次与展开体验接线完整、CHANGELOG 与版本一致。')

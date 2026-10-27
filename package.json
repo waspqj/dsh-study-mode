@@ -1,6 +1,6 @@
 {
   "name": "dsh-study-mode",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "description": "学习模式 agent 预设：主题知识库 + 检索优先的回答（命中标出处、查不到标未验证），侧边栏带知识库面板。",
   "keywords": [
     "deepseek-harness",
@@ -41,7 +41,8 @@
     "cordis.patch.yml",
     "icon.svg",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node test/format.test.mjs && node test/kb.test.mjs && node test/plugin.test.mjs && node test/card.test.mjs && node test/tools-schema.test.mjs && node test/ui.test.mjs && node test/client.test.mjs && node test/rerank.test.mjs && node test/llm.test.mjs && node test/compat.test.mjs",
