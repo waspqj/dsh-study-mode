@@ -28,6 +28,15 @@ export const name = 'learning-kb'
 
 export const inject = ['tools']
 
+// learn_entries 一次最多给多少条。
+//
+// 2026-10-30 用户实测「检索知识库的时候卡住了好久」，根因在这：
+// 清单工具没有默认上限 → 一次列 208 条 = 2.4 万字符 = 1.6 万 token，
+// 模型要咽下这一大坨才继续答，界面看着就像检索卡死。
+// 现在默认 30 条、最多 60 条，要更多用 offset 翻页。
+const ENTRIES_PAGE_DEFAULT = 30
+const ENTRIES_PAGE_MAX = 60
+
 function resolveRoot() {
   const override = process.env.DSH_LEARN_ROOT
   if (override && override.trim()) return path.resolve(override.trim())
@@ -429,6 +438,50 @@ function renderFacets(facets) {
   return parts.join('\n')
 }
 
+/**
+ * 给命中卡片挂上「关联 / 被引用」。
+ *
+ * 为什么要有（抄的是 dsh-eli-mode 的做法）：eli 的 kb_read 返回末尾会带
+ * 「关联：… / 反向关联：…」，于是模型能顺着知识网走 —— 命中 A 之后知道
+ * A 跟 B、C 是一路货，B 的内容可能才是答案。
+ * 本插件以前把链接建得挺好，**模型一次都没看见过** —— 建了等于没建。
+ *
+ * 只给标题和主题，不给正文：正文一次多带几十条就是白烧 token。
+ * 每边最多 3 条（再多模型也用不完）。
+ */
+function attachRelations(hits, graph) {
+  if (!graph || !graph.size) return hits
+  return hits.map(hit => {
+    const bucket = graph.get(hit.id)
+    if (!bucket) return hit
+    const links = bucket.links
+      .filter(link => link.resolved)
+      .slice(0, 3)
+      .map(link => ({ title: link.title, topic: link.topic, topicName: link.topicName }))
+    const backlinks = bucket.backlinks.slice(0, 3).map(item => ({
+      title: item.title,
+      topic: item.topic,
+      topicName: item.topicName,
+    }))
+    if (!links.length && !backlinks.length) return hit
+    return { ...hit, relations: { links, backlinks } }
+  })
+}
+
+/** 命中卡片底部的关联行（没有关联就不占地方）。 */
+function renderRelations(hit) {
+  const relations = hit && hit.relations
+  if (!relations) return []
+  const lines = []
+  if (relations.links && relations.links.length) {
+    lines.push('关联：' + relations.links.map(item => item.title).join('、'))
+  }
+  if (relations.backlinks && relations.backlinks.length) {
+    lines.push('被引用：' + relations.backlinks.map(item => item.title).join('、'))
+  }
+  return lines
+}
+
 function renderHitBlock(hit) {
   const lines = []
   lines.push(`${hit.strength} [${hit.score}] ${hit.fromCurrent ? '★' : ''}${hit.title}${hit.verified ? ' ✓已核实' : ' ⚠未核实'}${hit.padded ? '（按领域补全，非文字命中）' : ''}`)
@@ -440,6 +493,7 @@ function renderHitBlock(hit) {
   if (hit.source) meta.push(renderSource(hit.source))
   if (hit.topic) meta.push('主题 ' + hit.topic)
   if (meta.length) lines.push(meta.join(' · '))
+  lines.push(...renderRelations(hit))
   return lines
 }
 
@@ -469,13 +523,16 @@ export function roleOfPlanItem(item) {
  * @param {object} hit 命中条目
  * @returns {object} 卡片数据
  */
-function projectHitCard(hit) {
+function projectHitCard(hit, colorOf) {
   return {
     id: hit.id || null,
     title: String(hit.title || ''),
     body: String(hit.body || ''),
     topic: hit.topic || '',
     topicName: hit.topicName || hit.topic || '',
+    // 主题颜色：跟着主题走（建主题时定的），不同主题不撞色
+    // （2026-10-30 用户实测：哈希取模会让「面试」和「Qt」同色）
+    topicColor: colorOf ? colorOf(hit.topic) : null,
     kind: hit.kind || 'point',
     tags: Array.isArray(hit.tags) ? hit.tags : [],
     verified: hit.verified ?? false,
@@ -887,6 +944,16 @@ async function runSave({ ctx, store, args, exec }) {
 
 export function apply(ctx) {
   const store = createStore(resolveRoot())
+  // 主题颜色：跟着主题走（建主题时定好的），不同主题不撞色。
+  // 卡片投影里带上它，界面就能给每张卡用所属主题的颜色
+  // （2026-10-30 用户实测：按 slug 哈希取模会让「面试」和「Qt」撞成同一个紫）。
+  const topicColorOf = slug => {
+    try {
+      return store.topicColorOf(slug) || null
+    } catch {
+      return null
+    }
+  }
   // 检索重排也走 llm.js 的 callModel：把「插件自己的模型设置」挂上，
   // 否则这里会自顾自跟会话模型走，用户在面板里换的模型对重排不生效。
   // （两个半侧在同一进程、共用同一个 llm.js 模块实例，所以设一次就都生效。）
@@ -1061,9 +1128,9 @@ export function apply(ctx) {
       // 结构化卡片：界面用它把命中渲染成卡片（对话里 / 侧边栏里同一份数据）。
       // 渲染文本是给人（和模型）看的，presentationMeta 才是给界面做卡片用的。
       presentationMeta: (_args, value) => ({
-        kbCards: (Array.isArray(value?.hits) ? value.hits : []).map(projectHitCard),
+        kbCards: (Array.isArray(value?.hits) ? value.hits : []).map(hit => projectHitCard(hit, topicColorOf)),
         // 相关补充：同一份投影，但界面里排在命中卡片之后、默认折叠。
-        kbRelated: (Array.isArray(value?.related) ? value.related : []).map(projectHitCard),
+        kbRelated: (Array.isArray(value?.related) ? value.related : []).map(hit => projectHitCard(hit, topicColorOf)),
         // 卡片是哪来的：界面据此区分「检索命中」和「清单列出」——
         // 把列出来的 251 条说成「命中 251 条」是骗人（2026-10-23 用户实测）。
         kbCardSource: 'search',
@@ -1300,12 +1367,14 @@ export function apply(ctx) {
         }
       }
 
+      // 命中卡片带上「关联 / 被引用」：模型顺着知识网走（抄 dsh-eli-mode 的 kb_read）
+      const linkGraph = store.linkMap()
       return {
         scope: scope === 'all' ? 'all' : currentSlug || (scope === 'auto' ? 'all' : 'topic'),
         query,
         total,
-        hits: matched,
-        related,
+        hits: attachRelations(matched, linkGraph),
+        related: attachRelations(related, linkGraph),
         rerank: {
           used: split.used,
           reason: split.reason || '',
@@ -1352,7 +1421,12 @@ export function apply(ctx) {
               body: {
                 type: 'string',
                 description:
-                  '正文，≤400 字。首行结论；之后每行一个要点，行首 "- "；术语 **粗体**，重点 【】；参数/命令用 `反引号`。',
+                  '正文，≤400 字。首行结论；之后每行一个要点，行首 "- "；术语 **粗体**，重点 【】；参数/命令用 `反引号`。要引用别的卡片就在正文里写 [[那张卡的标题]]，界面会把它变成可点的链接。**正文里不要写「（这条尚未核实）」这类括号说明** —— 核实状态卡片上有徽章，写进正文只会冲淡结论。',
+              },
+              links: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '这张卡引用的其它卡片的标题（可跨主题）。正文里写 [[..]] 也会自动建链。',
               },
               tags: { type: 'array', items: { type: 'string' }, description: '2-5 个标签' },
               kind: { type: 'string', enum: ['point', 'qa'], description: 'point（知识点，默认）| qa（问答）' },
@@ -1361,7 +1435,11 @@ export function apply(ctx) {
                 type: 'object',
                 properties: {
                   type: { type: 'string', enum: ['user', 'file', 'web', 'model'], description: '出处类型' },
-                  ref: { type: 'string', description: '出处说明或文件路径' },
+                  ref: {
+                    type: 'string',
+                    description:
+                      '出处说明或文件路径。**同一份出处的卡要写一样的 ref** —— 出处一样才会自动连成一条链。模型知识统一写「模型知识」，「为什么值得单独成条」写进正文首行，别写成每张卡都不一样的一句话（那样每张卡自成一组，永远连不起来）。',
+                  },
                   locator: { type: 'string', description: '页码等定位，如 p.16-18' },
                 },
                 required: ['type'],
@@ -1429,9 +1507,18 @@ export function apply(ctx) {
             }
           }),
           // 待写入批次：界面拿它渲染「确认写入 N 条」按钮。
+          // suggestions = 每张卡的「建议关联」候选（界面渲染成可勾选的行）。
           kbSave:
             status === 'preview' && value?.batchId
-              ? { batchId: value.batchId, count: cards.length, topic: slug, topicName }
+              ? {
+                  batchId: value.batchId,
+                  count: cards.length,
+                  topic: slug,
+                  topicName,
+                  suggestions: Array.isArray(value.suggestions) ? value.suggestions : [],
+                  // 这批里「同一份出处」的分组：界面据此告诉用户「写入时会自动连成一组」
+                  batchSources: Array.isArray(value.batchSources) ? value.batchSources : [],
+                }
               : null,
         }
       },
@@ -1568,7 +1655,11 @@ export function apply(ctx) {
           type: 'string',
           description: '按领域过滤（数组或逗号分隔，如 "C++"；忽略大小写空格，"C++" 也命中 "C++14/17"）。',
         },
-        limit: { type: 'integer', description: '最多返回多少条' },
+        limit: { type: 'integer', description: '最多返回多少条（默认 30，最多 60；要看更多用 offset 翻页）' },
+        offset: {
+          type: 'integer',
+          description: '从第几条开始（0 起）。一次最多 60 条，要接着看就用 offset 继续。',
+        },
         query: {
           type: 'string',
           description:
@@ -1629,6 +1720,12 @@ export function apply(ctx) {
             value.entries.length > 30
               ? `⚠ 这里列了 ${value.entries.length} 条 —— 这是目录，不是答案。给用户的回答只挑相关的几条讲结论 + 出处标记，别把清单贴过去。`
               : '',
+            // **没列完就说清楚**（2026-10-30 用户实测「检索卡住了好久」的根因）：
+            // 清单默认只给 30 条，模型必须知道还剩多少、怎么接着列，
+            // 否则它会以为库里就这么多了，或者干脆再调一次把剩下的全拉回来。
+            value.total > value.entries.length
+              ? `（这里只列了前 ${value.entries.length} 条，共 ${value.total} 条；要接着看用 offset=${(value.offset || 0) + value.entries.length}，limit 最大 60）`
+              : '',
             ...value.entries.map(
               e =>
                 `- ${e.title}${e.status === 'archived' ? '（已归档）' : ''}${e.version > 1 ? ' v' + e.version : ''}${
@@ -1643,11 +1740,16 @@ export function apply(ctx) {
     execute(args, exec) {
       const sessionId = sessionIdOf(exec)
       const topic = args?.topic ? String(args.topic).trim() : undefined
-      const limit = Number.isInteger(args?.limit) && args.limit > 0 ? args.limit : undefined
+      // 清单默认只给 30 条、最多 60 条（2026-10-30 用户实测「检索卡住了好久」的根因）：
+      // 一次列 208 条 = 2.4 万字符 = 1.6 万 token，模型要咽下这一大坨，
+      // 界面也要跟着渲染，看起来就像卡死。要更多就用 offset 翻页。
+      const asked = Number.isInteger(args?.limit) && args.limit > 0 ? args.limit : ENTRIES_PAGE_DEFAULT
+      const limit = Math.min(ENTRIES_PAGE_MAX, asked)
       return store.listEntries({
         topic,
         sessionId,
         limit,
+        offset: Number.isInteger(args?.offset) && args.offset > 0 ? args.offset : undefined,
         status: args?.status ? String(args.status) : undefined,
         kind: args?.kind ? String(args.kind) : undefined,
         tag: args?.tag ? String(args.tag) : undefined,
@@ -1694,7 +1796,7 @@ export function apply(ctx) {
               body: {
                 type: 'string',
                 description:
-                  '卡片正文（≤400 字）：首行结论；之后每行一个要点，行首 "- "；术语 **粗体**，重点 【】，参数用 `反引号`。',
+                  '卡片正文（≤400 字）：首行结论；之后每行一个要点，行首 "- "；术语 **粗体**，重点 【】，参数用 `反引号`。不要在正文里写「（未核实）」这类说明（卡片上有徽章）。',
               },
               appliesTo: { type: 'string', description: '适用范围/领域，如 C++、MySQL 8.0' },
               tags: { type: 'array', items: { type: 'string' }, description: '2-5 个标签' },

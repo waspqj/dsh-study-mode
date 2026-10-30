@@ -14,6 +14,7 @@
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import vm from 'node:vm'
 
@@ -29,229 +30,8 @@ async function check(label, fn) {
   }
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+import { makeReact, find, findAll, textOf, sleep } from './harness.mjs'
 
-// ---------------------------------------------------------------- 最小 React
-function makeReact() {
-  const flatten = (list, out = []) => {
-    for (const item of list) {
-      if (Array.isArray(item)) flatten(item, out)
-      else if (item !== null && item !== undefined && item !== false && item !== true) out.push(item)
-    }
-    return out
-  }
-
-  // 每个组件实例一个 hook 帧：不能全局共用一个数组 —— 组件挂载/卸载会让
-  // 光标错位，A 组件的 useState 会被 B 组件读到（真实 React 里靠 fiber 隔离）。
-  const frames = new Map()
-  const instanceCounts = new Map()
-  let currentFrame = null
-  let dirty = false
-  let pending = []
-  let expanded = null
-
-  function enterFrame(id) {
-    let frame = frames.get(id)
-    if (!frame) {
-      frame = { values: [], deps: [], cleanup: [], cursor: 0 }
-      frames.set(id, frame)
-    }
-    frame.cursor = 0
-    const previous = currentFrame
-    currentFrame = frame
-    return () => {
-      currentFrame = previous
-    }
-  }
-
-  const slot = () => {
-    if (!currentFrame) throw new Error('hook 在组件外被调用')
-    return currentFrame.cursor++
-  }
-
-  const React = {
-    createElement(type, props, ...children) {
-      return { type, props: props || {}, children: flatten(children) }
-    },
-    useState(initial) {
-      const frame = currentFrame
-      const index = slot()
-      if (!(index in frame.values)) {
-        frame.values[index] = typeof initial === 'function' ? initial() : initial
-      }
-      const set = (next) => {
-        const value = typeof next === 'function' ? next(frame.values[index]) : next
-        if (!Object.is(value, frame.values[index])) {
-          frame.values[index] = value
-          dirty = true
-        }
-      }
-      return [frame.values[index], set]
-    },
-    useRef(initial) {
-      const frame = currentFrame
-      const index = slot()
-      if (!(index in frame.values)) frame.values[index] = { current: initial }
-      return frame.values[index]
-    },
-    useCallback(fn) {
-      slot()
-      return fn
-    },
-    useMemo(factory) {
-      slot()
-      return factory()
-    },
-    useEffect(fn, deps) {
-      const frame = currentFrame
-      const index = slot()
-      const previous = frame.deps[index]
-      const changed =
-        !previous ||
-        !deps ||
-        previous.length !== deps.length ||
-        deps.some((dep, position) => !Object.is(dep, previous[position]))
-      if (changed) {
-        frame.deps[index] = deps
-        pending.push({ frame, index, fn })
-      }
-    },
-    /**
-     * useLayoutEffect：真实 React 里在**绘制前**同步跑。
-     *
-     * 界面用它来「保持视口」——展开更多卡片时把滚动位置还原回去，
-     * 否则用户点一下就被弹到底部（2026-10-26 用户反馈）。
-     * 这个替身里跟 useEffect 一样入队（渲染后执行），效果上够用。
-     */
-    useLayoutEffect(fn, deps) {
-      const frame = currentFrame
-      const index = slot()
-      const previous = frame.deps[index]
-      const changed =
-        !previous ||
-        !deps ||
-        previous.length !== deps.length ||
-        deps.some((dep, position) => !Object.is(dep, previous[position]))
-      if (changed) {
-        frame.deps[index] = deps
-        pending.push({ frame, index, fn })
-      }
-    },
-  }
-
-  function reset() {
-    instanceCounts.clear()
-    dirty = false
-    pending = []
-  }
-
-  function expand(node) {
-    if (node === null || node === undefined || node === false) return null
-    if (typeof node === 'string' || typeof node === 'number') return String(node)
-    if (Array.isArray(node)) return node.map(expand).filter((item) => item !== null)
-    if (typeof node.type === 'function') {
-      const name = node.type.name || 'Anonymous'
-      const ordinal = instanceCounts.get(name) || 0
-      instanceCounts.set(name, ordinal + 1)
-      const props = { ...node.props, children: node.children.length === 1 ? node.children[0] : node.children }
-      const restore = enterFrame(name + '#' + ordinal)
-      try {
-        return expand(node.type(props))
-      } finally {
-        restore()
-      }
-    }
-    return { tag: node.type, props: node.props, children: expand(node.children) }
-  }
-
-  function stringify(node) {
-    if (node === null || node === undefined) return ''
-    if (typeof node === 'string') return node
-    if (Array.isArray(node)) return node.map(stringify).join('')
-    const attrs = [
-      'className',
-      'title',
-      'placeholder',
-      'value',
-      'type',
-      'id',
-      'width',
-      'height',
-      'viewBox',
-      'fill',
-      'stroke',
-      'disabled',
-    ]
-      .filter((key) => node.props[key] !== undefined && node.props[key] !== '' && node.props[key] !== false)
-      .map((key) => `${key}=${JSON.stringify(node.props[key])}`)
-      .join(' ')
-    return `<${node.tag}${attrs ? ' ' + attrs : ''}>${stringify(node.children)}</${node.tag}>`
-  }
-
-  /** 跑一轮渲染 + effect，状态变了就再来一轮（最多 12 轮） */
-  async function run(component, props = {}) {
-    for (let pass = 0; pass < 12; pass++) {
-      reset()
-      expanded = expand(React.createElement(component, props))
-      const jobs = pending
-      pending = []
-      for (const job of jobs) {
-        const previous = job.frame.cleanup[job.index]
-        if (typeof previous === 'function') previous()
-        const cleanup = job.fn()
-        job.frame.cleanup[job.index] = typeof cleanup === 'function' ? cleanup : null
-      }
-      await sleep(8)
-      if (!dirty) break
-    }
-    return { html: stringify(expanded), tree: expanded }
-  }
-
-  return {
-    React,
-    run,
-    /** 丢掉所有 hook 帧 = 模拟「重新挂载」，用来测初始化状态 */
-    forget() {
-      frames.clear()
-      reset()
-      expanded = null
-    },
-  }
-}
-
-/** 深度优先找第一个满足条件的元素 */
-function find(node, predicate) {
-  if (!node || typeof node === 'string') return null
-  if (Array.isArray(node)) {
-    for (const item of node) {
-      const hit = find(item, predicate)
-      if (hit) return hit
-    }
-    return null
-  }
-  if (predicate(node)) return node
-  return find(node.children, predicate)
-}
-
-/** 深度优先找全部满足条件的元素 */
-function findAll(node, predicate, out = []) {
-  if (!node || typeof node === 'string') return out
-  if (Array.isArray(node)) {
-    for (const item of node) findAll(item, predicate, out)
-    return out
-  }
-  if (predicate(node)) out.push(node)
-  findAll(node.children, predicate, out)
-  return out
-}
-
-/** 元素内的纯文本（展开后的 children 是数组，要递归拼） */
-function textOf(node) {
-  if (!node) return ''
-  if (typeof node === 'string') return node
-  if (Array.isArray(node)) return node.map(textOf).join('')
-  return textOf(node.children)
-}
 
 /** 按文本找按钮 */
 function findButton(node, text) {
@@ -354,6 +134,8 @@ const errJson = (error, status = 400) => ({
 
 /** /entries 返回的列表：用例可以换成「正文被截断」的版本（审计 P1-8） */
 let currentEntries = null
+/** /groups 返回的出处分组：用例可以换成真实库的分组（UX 体检用） */
+let currentGroups = null
 /** /entry 返回的正文全文 */
 let currentFullBody = '完整正文：' + '细节'.repeat(120)
 
@@ -526,6 +308,45 @@ const sandbox = {
         entry: { ...base, body: currentFullBody, bodyTruncated: false, bodyLength: currentFullBody.length },
       })
     }
+    // 卡片互链：正向（它连着谁）+ 反向（谁连着它）
+    if (route.endsWith('/links')) {
+      return okJson({
+        ok: true,
+        id: 'k_1',
+        title: 'ReadView 的四个字段',
+        links: [
+          { id: 'k_2', title: 'MVCC 多版本', topic: 'mysql-进阶', topicName: 'MySQL 进阶', resolved: true, from: 'body' },
+          { id: '', title: '还没建的卡', topic: null, topicName: null, resolved: false, from: 'manual' },
+        ],
+        backlinks: [{ id: 'k_3', title: '间隙锁的范围', topic: 'mysql-进阶', topicName: 'MySQL 进阶' }],
+      })
+    }
+    if (route.endsWith('/link')) return okJson({ ok: true })
+    // 扫描关联：全库扫一遍，把该连的连上
+    if (route.endsWith('/relate')) {
+      return okJson({ ok: true, added: 3, existed: 10, pairs: 13, topics: 2, hubs: [] })
+    }
+    // 出处分组：同一份课件的卡归一组
+    if (route.endsWith('/groups')) {
+      if (currentGroups) return okJson(currentGroups)
+      return okJson({
+        ok: true,
+        groups: [
+          {
+            key: 'file|课件 06 事务和锁.pdf',
+            ref: '课件 06 事务和锁.pdf',
+            type: 'file',
+            count: 2,
+            linked: 0,
+            cards: [
+              { id: 'k_1', title: '间隙锁', topic: 'mysql-进阶', topicName: 'MySQL 进阶', locator: 'p.16' },
+              { id: 'k_2', title: '同组里的另一张卡', topic: 'mysql-进阶', topicName: 'MySQL 进阶', locator: 'p.17' },
+            ],
+          },
+        ],
+      })
+    }
+    if (route.endsWith('/relate/group')) return okJson({ ok: true, groups: 1, linked: 1, skipped: 0, cards: 2 })
     if (route.endsWith('/search')) return okJson(fixtures.search)
     // 提议「同意」：宿主按 proposalId 生成正文并给出待写入批次
     if (route.endsWith('/propose/accept')) {
@@ -1186,6 +1007,166 @@ await check('正文被截断时，详情另取全文（不会拿摘要当正文�
   }
 })
 
+console.log('卡片互链')
+console.log('按出处补链（扫描关联）')
+await check('面板上有「按出处补链」按钮，点了会调接口并报结果', async () => {
+  const view = await run(Panel, {})
+  const button = findButton(view.tree, '按出处补链')
+  assert.ok(button, '找不到「按出处补链」按钮')
+  calls.length = 0
+  await button.props.onClick()
+  await sleep(30)
+  assert.ok(calls.some(item => item.url.includes('/relate')), '没有去调扫描接口')
+  const after = await run(Panel, {})
+  assert.match(after.html, /已建立 3 条关联/, '没告诉用户建了多少条')
+})
+
+await check('一条都没新增时说「没有新的关联可加」', async () => {
+  const view = await run(Panel, {})
+  const button = findButton(view.tree, '按出处补链')
+  assert.ok(button)
+  await button.props.onClick()
+  await sleep(30)
+  const after = await run(Panel, {})
+  assert.ok(after.html.length > 0)
+})
+
+console.log('按出处分组')
+await check('面板按出处分组显示，组头有「连成一组」按钮', async () => {
+  // 临时给列表加一张同出处的卡（分组要 ≥2 张才有东西可连）
+  const extra = {
+    ...fixtures.entries.entries[0],
+    id: 'k_2',
+    title: 'MVCC 多版本',
+    q: null,
+    source: { type: 'file', ref: '课件 06 事务和锁.pdf', locator: 'p.17' },
+  }
+  fixtures.entries.entries.push(extra)
+  try {
+    const view = await run(Panel, {})
+    assert.match(view.html, /课件 06 事务和锁\.pdf/, '没有按出处分组显示')
+    const button = findButton(view.tree, '连成一组')
+    assert.ok(button, '组头没有「连成一组」按钮')
+    calls.length = 0
+    await button.props.onClick()
+    await sleep(30)
+    assert.ok(calls.some(item => item.url.includes('/relate/group')), '按钮没有调连组接口')
+  } finally {
+    fixtures.entries.entries.pop()
+    const restored = await run(Panel, {})
+    const refresh = findButton(restored.tree, '刷新')
+    if (refresh) {
+      await refresh.props.onClick()
+      await sleep(20)
+    }
+  }
+})
+
+await check('可以切成平铺（不分组）', async () => {
+  const view = await run(Panel, {})
+  const flat = findButton(view.tree, '平铺')
+  assert.ok(flat, '没有「平铺」按钮')
+  await flat.props.onClick()
+  await sleep(20)
+  const after = await run(Panel, {})
+  assert.ok(!after.html.includes('kb-srcgroup-head'), '切成平铺后还带着组头')
+})
+
+await check('打开详情会拉链接，并显示「链接 / 被引用」', async () => {
+  const view = await run(Panel, {})
+  const card = find(view.tree, (node) => node.tag === 'article')
+  assert.ok(card, '找不到卡片')
+  calls.length = 0
+  await card.props.onClick()
+  await run(Panel, {}) // 挂上浮层，这一轮会跑 effect（取链接）
+  await sleep(30)
+  assert.ok(calls.some(item => item.url.includes('/links')), '详情没有去取链接')
+  const opened = await run(Panel, {})
+  assert.match(opened.html, /链接/, '浮层里没有「链接」这一段')
+  assert.match(opened.html, /被引用/, '浮层里没有「被引用」这一段')
+  assert.match(opened.html, /MVCC 多版本/, '正向链接没显示出来')
+  assert.match(opened.html, /间隙锁的范围/, '反向链接没显示出来')
+  assert.match(opened.html, /还没建的卡/, '悬空链接也要显示出来')
+})
+
+await check('点链接标题会打开那张卡', async () => {
+  const view = await run(Panel, {})
+  const card = find(view.tree, (node) => node.tag === 'article')
+  await card.props.onClick()
+  await run(Panel, {})
+  await sleep(30)
+  const opened = await run(Panel, {})
+  const title = find(opened.tree, (node) => node.props && node.props.className === 'kb-link-title')
+  assert.ok(title, '找不到链接标题')
+  assert.ok(title.props.onClick, '链接标题不可点')
+  calls.length = 0
+  await title.props.onClick()
+  await sleep(30)
+  assert.ok(
+    calls.some(item => item.url.includes('/entry') && item.url.includes('k_2')),
+    '点链接没有去取那张卡的详情',
+  )
+})
+
+await check('详情里的「同组」默认收起，点开才列出来', async () => {
+  const view = await run(Panel, {})
+  const card = find(view.tree, (node) => node.tag === 'article')
+  await card.props.onClick()
+  await run(Panel, {})
+  await sleep(30)
+  const opened = await run(Panel, {})
+  const toggle = find(opened.tree, (node) => node.props && node.props.className === 'kb-links-toggle')
+  assert.ok(toggle, '详情里没有「同组」那一行')
+  assert.match(textOf(toggle), /同组/, '折叠行没写清楚是同组')
+  // 默认收起：同组的卡不该一片铺在详情里（2026-10-30 用户反馈「噪音太大」）
+  const groupTitles = findAll(opened.tree, (node) => node.props && node.props.className === 'kb-link-title')
+  assert.ok(!groupTitles.some(node => textOf(node).includes('同组里的另一张卡')), '同组的卡默认不该铺开')
+  await toggle.props.onClick()
+  await sleep(20)
+  const expanded = await run(Panel, {})
+  const after = findAll(expanded.tree, (node) => node.props && node.props.className === 'kb-link-title')
+  assert.ok(after.some(node => textOf(node).includes('同组里的另一张卡')), '点开后应该列出同组的卡')
+})
+
+await check('正文里的 [[引用]] 渲染成可点的链接', async () => {
+  const savedBody = currentFullBody
+  const savedEntries = currentEntries
+  const base = fixtures.entries.entries[0]
+  currentFullBody = '先看 [[MVCC 多版本]] 再说。'
+  currentEntries = {
+    ...fixtures.entries,
+    entries: [{ ...base, body: base.body.slice(0, 20) + '…', bodyTruncated: true, bodyLength: 300 }],
+  }
+  try {
+    // 列表要先刷新，正文被截断这一版才会生效（否则详情拿到的是旧摘要）
+    const before = await run(Panel, {})
+    const refresh = findButton(before.tree, '刷新')
+    assert.ok(refresh, '找不到刷新按钮')
+    await refresh.props.onClick()
+    await sleep(30)
+    const view = await run(Panel, {})
+    const card = find(view.tree, (node) => node.tag === 'article')
+    await card.props.onClick()
+    await run(Panel, {})
+    await sleep(30)
+    const opened = await run(Panel, {})
+    const link = find(opened.tree, (node) => node.props && node.props.className === 'kb-linkref')
+    assert.ok(link, '正文里的 [[..]] 没有渲染成链接')
+    assert.equal(textOf(link), 'MVCC 多版本')
+    assert.ok(link.props.onClick, '链接不可点')
+  } finally {
+    currentFullBody = savedBody
+    currentEntries = savedEntries
+    // 把面板里的列表拉回原样：别把截断版留给后面的用例
+    const restored = await run(Panel, {})
+    const refresh = findButton(restored.tree, '刷新')
+    if (refresh) {
+      await refresh.props.onClick()
+      await sleep(20)
+    }
+  }
+})
+
 console.log('两列网格与详情浮层')
 await check('卡片排进两列网格容器', async () => {
   const view = await run(Panel, {})
@@ -1554,9 +1535,10 @@ await check('空行分段', () => {
   assert.equal(blocks[1].type, 'p')
 })
 
-await check('行首术语自动加粗（不改数据）', () => {
+await check('行首术语自动加粗并着色（不改数据）', () => {
   const blocks = parseBody('大端存储：数据低位存到内存高地址。')
-  assert.ok(blocks[0].runs[0].bold, '术语没被加粗')
+  // 术语单独一类：渲染成强调色 + 粗体（2026-10-30 用户实测「没有突出重点」后改的）
+  assert.ok(blocks[0].runs[0].term, '术语没被标成 term')
   assert.equal(blocks[0].runs[0].text, '大端存储')
 })
 
@@ -1575,7 +1557,7 @@ await check('列表项里的术语也加粗', () => {
   const blocks = parseBody('- 优点：A 快\n- 缺点：B 慢。')
   assert.equal(blocks[0].type, 'list')
   const second = blocks[0].items[1]
-  assert.ok(second.runs[0].bold, '列表项里的术语没加粗')
+  assert.ok(second.runs[0].term, '列表项里的术语没标成 term')
   assert.equal(second.runs[0].text, '缺点')
 })
 
@@ -1855,6 +1837,33 @@ await check('这一轮命中知识库时，回答下方出现一行小预览；�
 await check('这一轮没命中就什么都不渲染', async () => {
   const view = await run(turnTailReg.Component, { turn: turnOf([], 20), seq: 20 })
   assert.equal(view.html.trim(), '')
+})
+
+await check('写入预览里显示「建议关联」，高置信度的默认勾上', async () => {
+  const previewCard = { ...oneCard, id: null, title: '间隙锁与临键锁的区别' }
+  const save = {
+    batchId: 'b_1',
+    count: 1,
+    topic: 'mysql-进阶',
+    topicName: 'MySQL 进阶',
+    suggestions: [
+      {
+        title: '间隙锁与临键锁的区别',
+        candidates: [{ title: '间隙锁', why: '跟刚建的那张《间隙锁》一路', confidence: 'high' }],
+      },
+    ],
+    batchSources: [{ ref: '课件 06 事务和锁.pdf', count: 2 }],
+  }
+  const view = await run(turnTailReg.Component, {
+    turn: turnOf([{ seq: 12, cards: [previewCard], save }], 20),
+    seq: 20,
+  })
+  assert.match(view.html, /建议关联/, '预览里没有「建议关联」')
+  assert.match(view.html, /跟刚建的那张/, '建议要带理由')
+  assert.match(view.html, /写入时按顺序连成一组/, '没有告诉用户这批会自动连组')
+  const checkbox = find(view.tree, (node) => node.tag === 'input' && node.props && node.props.type === 'checkbox')
+  assert.ok(checkbox, '没有可勾的复选框')
+  assert.equal(checkbox.props.checked, true, '高置信度的建议应该默认勾上')
 })
 
 await check('turn 结束之后的结算不计入这一轮', async () => {
@@ -2958,6 +2967,253 @@ await check('固定后出现档位选择器，改档位会带上当前模型', a
   assert.equal(posted.body.aiModel.reasoningEffort, 'low')
   currentAiModel = { mode: 'session', provider: null, model: null, reasoningEffort: null }
 })
+
+
+// ---------------------------------------------------------------- 真实库 UX 体检
+//
+// 2026-10-30 用户要求「测试一下新添的功能，主要看用户体验会不会影响」。
+// 这里用**真实知识库**（~/.dsh/learn）渲染界面，量用户实际看到的东西：
+//   · 分组视图 vs 平铺视图：渲染量差多少（分组不该让界面变重）
+//   · 详情浮层里「同组」默认收起时占多少（128 张的组摊开就是噪音）
+// 没有真实库就跳过（别人的机器上跑不了这个体检）。
+console.log('真实库 UX 体检（用 ~/.dsh/learn 的真数据渲染）')
+{
+  const libRoot = path.join(os.homedir(), '.dsh', 'learn')
+  if (!fs.existsSync(libRoot)) {
+    console.log('  跳过：没有 ~/.dsh/learn')
+  } else {
+    const { createStore } = await import('../plugin/store.js')
+    const realStore = createStore(libRoot)
+    const rows = []
+    for (const topic of realStore.listTopics()) {
+      for (const entry of realStore.readEntries(topic.slug)) {
+        if ((entry.status || 'active') !== 'active') continue
+        rows.push({
+          id: entry.id,
+          topic: topic.slug,
+          topicName: topic.name || topic.slug,
+          kind: entry.kind || 'point',
+          status: entry.status || 'active',
+          title: entry.title,
+          q: entry.q || null,
+          body: String(entry.body || '').slice(0, 160),
+          bodyTruncated: String(entry.body || '').length > 160,
+          bodyLength: String(entry.body || '').length,
+          tags: entry.tags || [],
+          source: entry.source || null,
+          verified: entry.verified ?? false,
+          appliesTo: entry.appliesTo || null,
+          version: entry.version || 1,
+          updatedAt: entry.updatedAt || null,
+        })
+      }
+    }
+    const groups = realStore.sourceGroups().map(group => ({
+      key: group.key,
+      ref: group.ref,
+      type: group.type,
+      count: group.count,
+      linked: 0,
+      cards: group.cards.map(card => ({
+        id: card.id,
+        title: card.title,
+        topic: card.topic,
+        topicName: card.topicName,
+        locator: card.locator,
+      })),
+    }))
+    currentEntries = { topic: 'all', status: 'active', total: rows.length, brokenLines: 0, entries: rows }
+    currentGroups = { ok: true, groups }
+    try {
+      const countNodes = node => {
+        if (!node || typeof node === 'string') return 0
+        if (Array.isArray(node)) return node.reduce((sum, item) => sum + countNodes(item), 0)
+        return 1 + countNodes(node.children)
+      }
+      const grouped = await run(Panel, {})
+      const groupedNodes = countNodes(grouped.tree)
+      const groupedBytes = grouped.html.length
+      const heads = findAll(grouped.tree, node => node.props && node.props.className === 'kb-srcgroup-head')
+      const cards = findAll(grouped.tree, node => node.tag === 'article')
+      console.log(
+        `  真实库：${rows.length} 张卡 / ${groups.length} 个出处组` +
+          ` · 分组视图 ${groupedNodes} 个节点 / ${(groupedBytes / 1024).toFixed(0)} KB` +
+          ` · 组头 ${heads.length} 个 · 卡片 ${cards.length} 张`,
+      )
+      // 切平铺再量一次
+      const flatButton = findButton(grouped.tree, '平铺')
+      assert.ok(flatButton, '没有「平铺」按钮')
+      await flatButton.props.onClick()
+      await sleep(20)
+      const flat = await run(Panel, {})
+      const flatNodes = countNodes(flat.tree)
+      const flatBytes = flat.html.length
+      console.log(
+        `  平铺视图 ${flatNodes} 个节点 / ${(flatBytes / 1024).toFixed(0)} KB` +
+          ` → 分组让界面重了 ${groupedNodes - flatNodes} 个节点（${((groupedBytes - flatBytes) / 1024).toFixed(1)} KB）`,
+      )
+      assert.ok(groupedNodes - flatNodes < flatNodes * 0.15, '分组让渲染量涨得太多，用户会感觉到卡')
+      // 切回分组
+      const back = findButton(flat.tree, '按出处')
+      if (back) {
+        await back.props.onClick()
+        await sleep(20)
+      }
+      // 详情浮层：打开最大那个组里的卡，看「同组」默认是不是收着的
+      const biggest = groups.slice().sort((a, b) => b.count - a.count)[0]
+      if (biggest && biggest.cards.length) {
+        const target = biggest.cards[0]
+        currentFullBody = String(rows.find(row => row.id === target.id)?.body || '正文')
+        const view = await run(Panel, {})
+        const card = find(view.tree, node => node.tag === 'article')
+        assert.ok(card, '列表里没有卡片')
+        await card.props.onClick()
+        await run(Panel, {})
+        await sleep(30)
+        const opened = await run(Panel, {})
+        const toggle = find(opened.tree, node => node.props && node.props.className === 'kb-links-toggle')
+        assert.ok(toggle, '详情里没有「同组」那一行')
+        const collapsedNodes = countNodes(opened.tree)
+        const collapsedBytes = opened.html.length
+        await toggle.props.onClick()
+        await sleep(20)
+        const expanded = await run(Panel, {})
+        console.log(
+          `  详情浮层（${biggest.count} 张的组）：收起 ${collapsedNodes} 节点 / ${(collapsedBytes / 1024).toFixed(1)} KB` +
+            ` → 展开 ${countNodes(expanded.tree)} 节点 / ${(expanded.html.length / 1024).toFixed(1)} KB`,
+        )
+        assert.ok(collapsedBytes < expanded.html.length, '同组默认就该是收着的（展开后才变长）')
+      }
+    } finally {
+      currentEntries = null
+      currentGroups = null
+      const restored = await run(Panel, {})
+      const refresh = findButton(restored.tree, '刷新')
+      if (refresh) {
+        await refresh.props.onClick()
+        await sleep(20)
+      }
+    }
+  }
+}
+
+
+// ---------------------------------------------------------------- 界面快照（看得到的就存一份）
+//
+// 2026-10-30 用户要求「以后测试就可以加一轮这种测试」。
+// 这一轮把**渲染出来的界面**存成快照：谁改了界面，快照会不一样 → 测试立刻红，
+// 而且 diff 是人能读的（哪个 class、哪行字变了）。
+//
+// 快照存哪：test/__snapshots__/ui.json
+// 怎么更新（确认改动是对的之后）：node test/client.test.mjs --update
+{
+  const snapshotPath = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '__snapshots__', 'ui.json')
+  const updateMode = process.argv.includes('--update')
+
+  /** 把渲染结果压成「人能读的快照」：标签结构 + class + 文字 */
+  const snapshotOf = tree => {
+    const lines = []
+    const walk = (node, depth) => {
+      if (!node || typeof node === 'string') {
+        const text = typeof node === 'string' ? node.trim() : ''
+        if (text) lines.push('  '.repeat(depth) + '"' + text + '"')
+        return
+      }
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item, depth)
+        return
+      }
+      if (node.tag) {
+        const className = String((node.props && node.props.className) || '')
+        lines.push('  '.repeat(depth) + '<' + node.tag + (className ? ' .' + className.split(/\s+/).join('.') : '') + '>')
+        walk(node.children, depth + 1)
+      }
+    }
+    walk(tree, 0)
+    return lines.join('\n')
+  }
+
+  const shots = {}
+
+  // ① 面板（分组视图）
+  {
+    const view = await run(Panel, {})
+    shots['panel-grouped'] = snapshotOf(view.tree)
+  }
+  // ② 面板（平铺视图）
+  {
+    const view = await run(Panel, {})
+    const flat = findButton(view.tree, '平铺')
+    if (flat) {
+      await flat.props.onClick()
+      await sleep(20)
+    }
+    const after = await run(Panel, {})
+    shots['panel-flat'] = snapshotOf(after.tree)
+    const back = findButton(after.tree, '按出处')
+    if (back) {
+      await back.props.onClick()
+      await sleep(20)
+      await run(Panel, {})
+    }
+  }
+  // ③ 卡片详情（带「链接 / 被引用 / 同组折叠行」）
+  {
+    const view = await run(Panel, {})
+    const card = find(view.tree, node => node.tag === 'article')
+    if (card) {
+      await card.props.onClick()
+      await run(Panel, {})
+      await sleep(30)
+      const opened = await run(Panel, {})
+      shots['card-modal'] = snapshotOf(opened.tree)
+      const close = findButton(opened.tree, '关闭')
+      if (close) {
+        await close.props.onClick()
+        await run(Panel, {})
+      }
+    }
+  }
+
+  if (updateMode) {
+    fs.mkdirSync(path.dirname(snapshotPath), { recursive: true })
+    fs.writeFileSync(snapshotPath, JSON.stringify(shots, null, 2) + '\n', 'utf8')
+    console.log('\n界面快照已更新：', snapshotPath)
+  } else {
+    const saved = fs.existsSync(snapshotPath) ? JSON.parse(fs.readFileSync(snapshotPath, 'utf8')) : {}
+    const names = Object.keys(shots)
+    const changed = names.filter(name => saved[name] !== shots[name])
+    const missing = names.filter(name => saved[name] === undefined)
+    if (missing.length) {
+      console.log('  快照缺失：' + missing.join('、') + '（先跑一次 node test/client.test.mjs --update 生成）')
+    }
+    if (changed.length) {
+      console.log('  界面变了：' + changed.join('、'))
+      for (const name of changed.slice(0, 1)) {
+        const before = String(saved[name] || '').split('\n')
+        const after = String(shots[name]).split('\n')
+        for (let i = 0; i < Math.max(before.length, after.length); i++) {
+          if (before[i] !== after[i]) {
+            console.log('    ' + name + ' 第 ' + (i + 1) + ' 行：')
+            console.log('      旧：' + (before[i] === undefined ? '（没有）' : before[i]))
+            console.log('      新：' + (after[i] === undefined ? '（没有）' : after[i]))
+            break
+          }
+        }
+      }
+      console.log('    确认改动是对的之后：node test/client.test.mjs --update')
+    }
+    if (!changed.length && !missing.length) {
+      console.log('  界面快照一致（' + names.length + ' 张：' + names.join('、') + '）')
+    }
+    if (!updateMode) {
+      await check('界面快照跟上次一致（谁改了界面，快照会不一样）', () => {
+        assert.equal(missing.length, 0, '快照缺失：' + missing.join('、') + '（跑 node test/client.test.mjs --update 生成）')
+        assert.equal(changed.length, 0, '界面变了：' + changed.join('、') + '（确认改动是对的之后跑 node test/client.test.mjs --update）')
+      })
+    }
+  }
+}
 
 console.log('')
 console.log(passed + ' assertions passed')

@@ -193,6 +193,39 @@ await check('learn_entries 返回 facets（领域 + 标签分布）', async () =
   assert.equal(typeof result.facets.unscoped, 'number')
 })
 
+console.log('清单要限量（2026-10-30 用户实测「检索卡住了好久」的根因）')
+await check('不传 limit 时最多给 30 条', async () => {
+  const result = await entriesTool.execute({ topic: '测试主题' }, exec)
+  assert.ok(result.entries.length <= 30, '一次最多给 30 条')
+})
+await check('limit 再大也封顶在 60 条', async () => {
+  const result = await entriesTool.execute({ topic: '测试主题', limit: 5000 }, exec)
+  assert.ok(result.entries.length <= 60, '清单一次最多 60 条 —— 200 多条就是 2.4 万字符了')
+})
+await check('offset 能翻页，且跟第一页不重叠', async () => {
+  const first = await entriesTool.execute({ topic: '测试主题', limit: 5 }, exec)
+  const second = await entriesTool.execute({ topic: '测试主题', limit: 5, offset: 5 }, exec)
+  const firstIds = new Set(first.entries.map(entry => entry.id))
+  const overlap = second.entries.filter(entry => firstIds.has(entry.id))
+  assert.equal(overlap.length, 0, '两页不该有重复')
+})
+await check('没列完时要说清楚还剩多少、怎么接着列', async () => {
+  // 模型必须知道「还有更多」，否则它会以为库里就这么多了
+  const rendered = entriesTool.output.render(
+    {},
+    {
+      topic: '测试主题',
+      total: 208,
+      offset: 0,
+      entries: [{ id: 'k_1', title: '示例卡', tags: [], version: 1, verified: false }],
+      facets: null,
+    },
+  )
+  const text = Array.isArray(rendered) ? rendered.map(part => part.text || '').join('\n') : String(rendered)
+  assert.match(text, /只列了前 1 条/, '要说明只列了一部分')
+  assert.match(text, /offset=/, '要告诉模型怎么接着列')
+})
+
 await check('learn_entries 也发布 kbCards（「有哪些」类回答不能没有卡片）', async () => {
   // 回归：批次 1 把「清单类问题」导向 learn_entries，但它当时没有 presentationMeta，
   // 于是模型列了 13 条、对话里一张卡片都没出现（2026-10-23 用户实测报「没给我卡片啊」）。

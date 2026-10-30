@@ -25,6 +25,8 @@ import path from 'node:path'
 
 import { rankDocs, jaccard, tokenSet, tokenize, entryTokenSet, tokenSetWithCompounds, createRanker } from './rank.js'
 import { formatVersion } from './format.js'
+import { buildLinkIndex, indexAdd, resolveEntryLinks, backlinksOf, linkRows, resolveRef, normalizeLinkTitle, deriveBodyLinks, LINK_MAX } from './links.js'
+import { cardFeatures, judgeRelated } from './relate.js'
 
 /** 把主题显示名转成目录用的 slug。中文保留，只清理空白与标点。 */
 export function slugify(name) {
@@ -537,6 +539,12 @@ export function createStore(root) {
 
   function listTopics() {
     ensureRoot()
+    // 老主题可能还没配色（颜色是后加的）→ 一次性补齐，见 ensureTopicColors
+    const slugs = []
+    for (const item of fs.readdirSync(topicsDir, { withFileTypes: true })) {
+      if (item.isDirectory()) slugs.push(item.name)
+    }
+    ensureTopicColors(slugs)
     const out = []
     for (const item of fs.readdirSync(topicsDir, { withFileTypes: true })) {
       if (!item.isDirectory()) continue
@@ -548,6 +556,9 @@ export function createStore(root) {
         slug,
         name: meta.name || slug,
         description: meta.description || '',
+        // 主题颜色：建主题时定的，写在元数据里 —— 不同主题不会撞色，
+        // 而且主题改名/增删都不会让别人的颜色变（2026-10-30 用户实测撞色后改的）
+        color: meta.color || TOPIC_COLORS[Math.abs(hashSlug(slug)) % TOPIC_COLORS.length],
         // 主题级领域（2026-10-23 用户定）：条目没标 appliesTo 时用它兜底 ——
         // 「mysql-进阶 主题里的知识点，领域就是 MySQL」。
         domain: meta.domain || '',
@@ -678,6 +689,76 @@ export function createStore(root) {
   }
 
   /** 新建/更新主题元数据；同名则补别名，不丢已有条目。 */
+  /**
+   * 主题配色表。
+   *
+   * 为什么颜色要存进主题、而不是「拿主题名哈希一下取模」：
+   * 2026-10-30 用户实测「不同主题的颜色不同，怎么颜色撞了」——
+   * 哈希取模会撞（真库上「面试」和「Qt」都拿到了同一个紫色 #8b5cf6）。
+   * 而且哈希的颜色会随着主题增删而变（同一个主题这次蓝下次绿）。
+   *
+   * 所以：**颜色在主题创建时定一个，写进主题元数据**，之后不变、不同主题不撞。
+   */
+  const TOPIC_COLORS = [
+    '#3b82f6',
+    '#8b5cf6',
+    '#06b6d4',
+    '#10b981',
+    '#f59e0b',
+    '#f43f5e',
+    '#ec4899',
+    '#14b8a6',
+    '#a855f7',
+    '#f97316',
+  ]
+
+  /** 还没被用掉的颜色（按顺序找第一个空闲的；全用完了就按数量取模）。 */
+  function pickTopicColor(used) {
+    for (const color of TOPIC_COLORS) {
+      if (!used.has(color)) return color
+    }
+    return TOPIC_COLORS[used.size % TOPIC_COLORS.length]
+  }
+
+  /**
+   * 给还没配色的老主题补一个颜色（一次性迁移）。
+   *
+   * 写在 listTopics 里：那里本来就有 ensureRoot()（会建目录），
+   * 顺手把「老主题没颜色」也补齐 —— 否则老主题永远是默认色。
+   */
+  function ensureTopicColors(slugs) {
+    const used = new Set()
+    for (const slug of slugs) {
+      const color = readMeta(slug).color
+      if (color) used.add(color)
+    }
+    for (const slug of slugs) {
+      const meta = readMeta(slug)
+      if (meta.color) continue
+      meta.color = pickTopicColor(used)
+      used.add(meta.color)
+      try {
+        writeMeta(slug, meta)
+      } catch {
+        // 写不进去就算了（只读盘），颜色退回默认
+      }
+    }
+  }
+
+  /** 某个主题的颜色（没有就按 slug 兜底算一个）。 */
+  function topicColorOf(slug) {
+    const color = readMeta(slug).color
+    if (color) return color
+    return TOPIC_COLORS[Math.abs(hashSlug(slug)) % TOPIC_COLORS.length]
+  }
+
+  function hashSlug(slug) {
+    const s = String(slug || '')
+    let h = 0
+    for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
+    return h
+  }
+
   function createTopic(name, meta = {}) {
     const display = String(name ?? '').trim()
     if (!display) throw new Error('主题名称不能为空')
@@ -726,12 +807,20 @@ export function createStore(root) {
       existing.updatedAt = now()
       writeMeta(slug, existing)
     } else {
+      // 新主题：定一个颜色（跟别的主题不撞）—— 见 TOPIC_COLORS 那段说明
+      const used = new Set()
+      for (const item of fs.readdirSync(topicsDir, { withFileTypes: true })) {
+        if (!item.isDirectory()) continue
+        const color = readMeta(item.name).color
+        if (color) used.add(color)
+      }
       writeMeta(slug, {
         name: display,
         slug: slug,
         description,
         keywords,
         ...(domain ? { domain } : {}),
+        color: pickTopicColor(used),
         aliases: [],
         createdAt: now(),
         updatedAt: now(),
@@ -1148,6 +1237,9 @@ export function createStore(root) {
     // 先记下文件状态，再读内容：这样才能判断「读之后有没有被别人改过」
     const observed = statFile(topicFile(slug))
     const entries = readEntries(slug)
+    // 链接解析要跨主题（「这条和 MySQL 那条有关」），所以索引是全量的。
+    const others = collectOtherEntries(slug)
+    const linkIdx = buildLinkIndex([...entries, ...others])
     const plan = []
 
     for (const card of cards) {
@@ -1181,7 +1273,19 @@ export function createStore(root) {
             ? card.verified
             : existing?.verified ?? (card?.source?.type === 'user'),
         appliesTo: card?.appliesTo ? String(card.appliesTo).trim() : existing?.appliesTo ?? null,
+        // 链接：手动链接（模型给的 links）+ 正文里的 [[..]]（重算，但认得出旧的 id）
+        links: computeLinks({
+          body,
+          manualRaw: card?.links,
+          oldLinks: existing?.links,
+          index: linkIdx,
+          topic: slug,
+        }),
       })
+      // 同一批里的卡片要能互相引用：第 1 张还没落盘，但 id 早就知道了
+      if (newId) {
+        indexAdd(linkIdx, { id: newId, title, topic: slug })
+      }
     }
 
     // 语料统计只准备一次（审计 P1-3）：三个检查都拿同一批条目做 BM25，
@@ -1190,12 +1294,48 @@ export function createStore(root) {
     const legacyRank = process.env.DSH_KB_LEGACY_RANK === '1'
     const pool = entries.filter(entry => (entry.status || 'active') === 'active')
     const topicRanker = legacyRank ? null : createRanker(pool)
-    const others = collectOtherEntries(slug)
     const otherRanker = !legacyRank && others.length ? createRanker(others) : null
+
+    // 同批次的同源卡：按页码连成链。
+    //
+    // 为什么自动连（不劳用户点）：同一节课件里整理出来的卡本来就是一条线，
+    // 让用户在预览里逐条勾 40 次是折磨；而这个判据几乎不会错（同一份出处）。
+    // 语义层面的关系（模型/用户判断的）才走「建议关联」，由人裁决。
+    const batchGroups = new Map()
+    for (const item of plan) {
+      // 用**归一化后的出处键**（跟面板分组同一把钥匙）：模型来源的 ref 是
+      // 「模型知识展开（为什么值得单独成条）」这种每张都不同的长句，
+      // 按原 ref 分组就永远连不起来（2026-10-30 用户实测：3 张 C# 卡各成一组）。
+      const keyed = sourceKeyOf(item.source)
+      if (!keyed) continue
+      const bucket = batchGroups.get(keyed.key) || { label: keyed.label, items: [] }
+      bucket.items.push(item)
+      batchGroups.set(keyed.key, bucket)
+    }
+    // 批次里「同一份出处」的分组摘要：界面用它告诉用户「这批会自动连成一组」
+    const batchSources = []
+    for (const bucket of batchGroups.values()) {
+      const { label: ref, items } = bucket
+      if (items.length < 2) continue
+      batchSources.push({ ref, count: items.length })
+      items.sort((a, b) => locatorPage(a.source) - locatorPage(b.source))
+      for (let i = 0; i < items.length - 1; i++) {
+        const from = items[i]
+        const to = items[i + 1]
+        if (!from.newId || !to.newId) continue
+        const links = Array.isArray(from.links) ? from.links : []
+        if (links.some(item2 => item2 && item2.id === to.newId)) continue
+        links.push({ id: to.newId, title: to.title, from: 'auto', why: `同一份《${ref}》` })
+        if (links.length > LINK_MAX) links.length = LINK_MAX
+        from.links = links
+      }
+    }
 
     const related = findRelated(slug, cards, others, otherRanker)
     const similar = findSimilarInTopic(slug, cards, pool, topicRanker)
     const nearby = findNearbyInTopic(slug, cards, pool, topicRanker)
+    // 建议关联：预览时给用户看「这张卡可以跟谁连上」，写入时按用户勾选的落盘
+    const suggestions = suggestLinks({ topic: slug, cards, sessionId })
 
     if (!dryRun) {
       assertUnchanged(slug, observed)
@@ -1212,6 +1352,11 @@ export function createStore(root) {
           existing.source = item.source
           existing.verified = item.verified
           existing.appliesTo = item.appliesTo
+          // 链接清单空了就别留字段：kb.jsonl 里一行 [] 是纯噪音
+          if (Array.isArray(item.links)) {
+            if (item.links.length) existing.links = item.links
+            else delete existing.links
+          }
           existing.status = 'active'
           delete existing.archivedAt
           existing.updatedAt = now()
@@ -1228,6 +1373,7 @@ export function createStore(root) {
             source: item.source,
             verified: item.verified,
             appliesTo: item.appliesTo,
+            links: item.links && item.links.length ? item.links : undefined,
             status: 'active',
             createdAt: now(),
             updatedAt: now(),
@@ -1241,6 +1387,8 @@ export function createStore(root) {
       if (!meta.name) meta.name = slug
       if (!meta.createdAt) meta.createdAt = meta.updatedAt
       writeMeta(slug, meta)
+      // 记下本会话刚碰过的卡：用户接着问更深的问题时，新卡最该连的就是它们
+      rememberCards(sessionId, plan.filter(item => item.id).map(item => item.id))
     }
 
     return {
@@ -1258,6 +1406,8 @@ export function createStore(root) {
       related,
       similar,
       nearby,
+      suggestions,
+      batchSources,
       total: entries.length,
     }
   }
@@ -1279,7 +1429,16 @@ export function createStore(root) {
         entry.title = title
         entry.normTitle = normalizeTitle(entry.title)
       }
-      if (fields.body !== undefined) entry.body = String(fields.body).trim()
+      if (fields.body !== undefined) {
+        entry.body = String(fields.body).trim()
+        // 正文改了，正文里的 [[..]] 引用要跟着重算（认得出旧的 id，改名也不会断）
+        entry.links = computeLinks({
+          body: entry.body,
+          oldLinks: entry.links,
+          index: linkSnapshot().index,
+          topic: candidate,
+        })
+      }
       if (fields.q !== undefined) entry.q = String(fields.q).trim()
       if (fields.tags !== undefined) {
         entry.tags = (Array.isArray(fields.tags) ? fields.tags : [])
@@ -1293,6 +1452,17 @@ export function createStore(root) {
       }
       if (fields.verified !== undefined) entry.verified = !!fields.verified
       if (fields.kind !== undefined) entry.kind = fields.kind === 'qa' ? 'qa' : 'point'
+      if (fields.links !== undefined) {
+        // 手动链接：给了就整份换掉（界面删链接走的是 removeLink，不是这条路）。
+        // 正文里的 [[..]] 照旧重算 —— 那是活的。
+        entry.links = computeLinks({
+          body: entry.body,
+          manualRaw: fields.links,
+          oldLinks: entry.links,
+          index: linkSnapshot().index,
+          topic: candidate,
+        })
+      }
       if (bumpVersion) entry.version = nextVersion(entry.version)
       entry.updatedAt = now()
       writeEntries(candidate, entries)
@@ -1352,8 +1522,16 @@ export function createStore(root) {
         entry.originalBody = entry.body || ''
         entry.originalVersion = current
         entry.originalUpdatedAt = entry.updatedAt || null
+        entry.originalLinks = entry.links
       }
       entry.body = String(body ?? '').trim()
+      // 正文改了 → 正文里的 [[..]] 引用跟着重算
+      entry.links = computeLinks({
+        body: entry.body,
+        oldLinks: entry.links,
+        index: linkSnapshot().index,
+        topic: candidate,
+      })
       entry.version = nextVersion(current)
       entry.updatedAt = now()
       // 写回痕迹：这次正文是「AI 校验之后」改的，记一笔，但不动 source
@@ -1414,7 +1592,15 @@ export function createStore(root) {
       entry.originalBody = currentBody
       entry.originalVersion = currentVersion
       entry.originalUpdatedAt = currentUpdatedAt
+      entry.originalLinks = entry.links
       entry.body = originalBody
+      // 正文回退了，正文里的 [[..]] 引用也跟着回退
+      entry.links = computeLinks({
+        body: originalBody,
+        oldLinks: entry.originalLinks,
+        index: linkSnapshot().index,
+        topic: candidate,
+      })
       entry.version = originalVersion
       entry.updatedAt = originalUpdatedAt || now()
       entry.verified = false
@@ -1656,7 +1842,7 @@ export function createStore(root) {
   }
 
   /** 列出条目，支持按状态/类型/标签/领域/关键词过滤。 */
-  function listEntries({ topic, sessionId, limit, status, kind, tag, appliesTo, query }) {
+  function listEntries({ topic, sessionId, limit, offset, status, kind, tag, appliesTo, query }) {
     const slug = topic ? resolveSlug(topic) : currentTopic(sessionId)
     if (!slug) {
       throw new Error('当前会话没有绑定主题：先调用 learn_topics(action="create"|"use") 指定主题')
@@ -1704,17 +1890,22 @@ export function createStore(root) {
           )
       : filtered
     const max = Number.isInteger(limit) && limit > 0 ? limit : ordered.length
+    // 分页：从第几条开始（模型翻页看剩下的清单用）。
+    // 不分页的话，一次 200 多条的清单就是 2 万多字符 —— 模型要咽下这一大坨，
+    // 看起来就像「检索卡住了」（2026-10-30 用户实测）。
+    const start = Number.isInteger(offset) && offset > 0 ? offset : 0
     return {
       topic: slug,
       topicDomain: topicDomain || null,
       total: ordered.length,
+      offset: start,
       topicTotal: entries.filter(entry => (entry.status || 'active') === wanted || wanted === 'all').length,
       brokenLines: entries.broken || 0,
       facets: buildFacets(entries, topicDomain),
       // 关键词过滤时：模型要知道每个方向各命中几条（RAII 0 条 = 库里真没有）
       terms: terms.length ? terms : null,
       termStats: terms.length ? termStats : null,
-      entries: ordered.slice(0, max).map(entry => ({
+      entries: ordered.slice(start, start + max).map(entry => ({
         id: entry.id,
         kind: entry.kind || 'point',
         status: entry.status || 'active',
@@ -1730,9 +1921,620 @@ export function createStore(root) {
     }
   }
 
+  // ---------------------------------------------------------------- 卡片互链
+  //
+  // 一张卡片可以连着别的卡片（正向），也可以被别人连着（反向 / 被引用）。
+  // 链接有两种来路：
+  //   - 正文里的 [[某某]]：活的。改一次正文，链接跟着变；那张卡建好了，悬空的自动接上。
+  //   - 手动挂的（entry.links）：界面加的、工具给的。跟正文互不影响。
+  // 读的时候两者合并，所以卡片改名不会指错人。
+
+  /**
+   * 全库条目（跨主题），带主题显示名。
+   * 链接可以跨主题（「这条和 MySQL 那条有关」），所以解析必须看全量。
+   */
+  function allEntries() {
+    const out = []
+    for (const topic of listTopics()) {
+      const name = topic.name || topic.slug
+      for (const entry of readEntries(topic.slug)) {
+        out.push({ ...entry, topic: entry.topic || topic.slug, topicName: name })
+      }
+    }
+    return out
+  }
+
+  /**
+   * 链接快照：全库条目 + 索引。
+   *
+   * 失效信号用主题文件的 mtime+size（和读缓存同一套）——
+   * 写条目必然重写 kb.jsonl，mtime 一定变，所以索引不会拿着旧数据。
+   */
+  let linkCache = null
+  function linkSnapshot() {
+    const signature = listTopics()
+      .map(topic => {
+        const stat = statFile(topicFile(topic.slug))
+        return `${topic.slug}:${stat ? stat.mtimeMs : 0}:${stat ? stat.size : 0}`
+      })
+      .join('|')
+    if (linkCache && linkCache.signature === signature) return linkCache
+    const entries = allEntries()
+    linkCache = { signature, entries, index: buildLinkIndex(entries), features: null }
+    return linkCache
+  }
+
+  /**
+   * 全库卡片的「特征」（标题词/正文词集合），按链接快照一起缓存。
+   *
+   * 为什么缓存：判断两张卡相不相关要用它们的词集合，而算一遍要分词整个正文
+   * —— 338 张卡就是 338 遍分词（实测 60ms）。预览时每次都要用，
+   * 缓存住就只算一次（库变了才重算）。
+   */
+  function featureCache() {
+    const snapshot = linkSnapshot()
+    if (snapshot.features) return snapshot.features
+    const map = new Map()
+    for (const entry of snapshot.entries) {
+      map.set(entry.id, cardFeatures({ title: entry.title, body: entry.body || '', q: entry.q || '', tags: entry.tags || [] }))
+    }
+    snapshot.features = map
+    return map
+  }
+
+  /** 主题显示名。 */
+  function topicNameOf(slug) {
+    if (!slug) return null
+    const meta = readMeta(slug)
+    return meta.name || slug
+  }
+
+  /**
+   * 出处的「分组键」：哪些卡算同一份出处。
+   *
+   * 2026-10-30 用户实测发现的问题：模型给「模型知识展开」的卡写出处时，
+   * 把**为什么值得单独成条**写进了 source.ref —— 每张卡一句不同的话：
+   *   「模型知识展开（库里只有运算符层面的对比，缺少…）」
+   *   「模型知识展开（库里只有运算符差异与语言整体差异，没有…）」
+   * 按 ref 分组的话，每张卡自成一组 → 永远连不起来，也没有「自动连成一组」的提示。
+   *
+   * 所以：**模型来源一律归到「模型知识」这个桶**（卡片详情里仍然显示原来那句理由，
+   * 一个字都不丢），用户来源没写 ref 的归到「手动添加」。
+   * 文件来源照旧按文件名分 —— 那才是真正的一份课件。
+   *
+   * @param {{type?: string, ref?: string}|null|undefined} source
+   * @returns {{key: string, label: string, type: string}|null}
+   */
+  function sourceKeyOf(source) {
+    if (!source) return null
+    const type = String(source.type || '').trim()
+    const ref = String(source.ref || '').trim()
+    if (!type && !ref) return null
+    if (type === 'model') return { key: 'model|模型知识', label: '模型知识', type }
+    if (!ref) return { key: type + '|手动添加', label: '手动添加', type }
+    return { key: type + '|' + ref, label: ref, type }
+  }
+
+  /**
+   * 出处分组：同一份文件/课件的卡归一组。
+   *
+   * 为什么按「文件」而不是「页码」：实测用户的库 338 张卡里有 335 张能按文件
+   * 归到 19 个组（面试常考点 128 张、InnoDB 课件 65 张…），而按页码会碎成
+   * 294 组、其中 263 组只有 1 张 —— 页码太细，起不到「组织」的作用。
+   *
+   * **同组就是真关系**：同一节课件里讲的知识点本来就是一条线。
+   * 之前按相似度连出来的弱边（「纯虚函数 ↔ inline 内联」那种）就是跨了组。
+   *
+   * @param {{topic?: string}} [options] 只看某个主题（不填 = 全库）
+   * @returns {{key: string, ref: string, type: string, count: number, cards: object[]}[]}
+   */
+  function sourceGroups({ topic } = {}) {
+    const entries = allEntries().filter(entry => (entry.status || 'active') === 'active')
+    const scoped = topic ? entries.filter(entry => entry.topic === topic) : entries
+    const groups = new Map()
+    for (const entry of scoped) {
+      const source = entry.source || null
+      const keyed = sourceKeyOf(source)
+      if (!keyed) continue
+      const { key, label, type } = keyed
+      const bucket = groups.get(key) || { key, ref: label, type, cards: [] }
+      bucket.cards.push({
+        id: entry.id,
+        title: entry.title,
+        topic: entry.topic,
+        topicName: entry.topicName,
+        locator: source?.locator || null,
+        page: locatorPage(source),
+      })
+      groups.set(key, bucket)
+    }
+    const out = []
+    for (const bucket of groups.values()) {
+      // 组内按页码排；没有页码的排在后面，**彼此之间保持写入顺序**
+      // （allEntries 已按主题顺序读出，sort 是稳定的，所以不加二级排序就是原顺序）。
+      // 之前这里还跟了一句 title.localeCompare —— 那会把「模型知识」这种没有页码的组
+      // 按标题排，链的顺序就乱了（模型知识展开的卡本来是按讲解顺序写的）。
+      bucket.cards.sort((a, b) => a.page - b.page)
+      out.push({ ...bucket, count: bucket.cards.length })
+    }
+    // 大组在前（用户最先要看的是那份讲得最多的课件）
+    out.sort((a, b) => b.count - a.count || String(a.ref).localeCompare(String(b.ref)))
+    return out
+  }
+
+  /**
+   * 某张卡所在的组（详情浮层的「同组 N 张」用它）。
+   *
+   * @param {string} id 卡片 id
+   * @returns {{key: string, ref: string, type: string, count: number, cards: object[]}|null}
+   */
+  function sourceGroupOf(id) {
+    const target = allEntries().find(entry => entry.id === id)
+    if (!target) return null
+    const keyed = sourceKeyOf(target.source)
+    if (!keyed) return null
+    return sourceGroups().find(group => group.key === keyed.key) || null
+  }
+
+  /**
+   * 把同组的卡连成链：按页码顺序，每张连下一张。
+   *
+   * 为什么是链不是全连：128 张一组全连是 8000 条边，界面上一片红；
+   * 链的话每张卡只有 1 条出边，而顺着链能把整组从头走到尾 ——
+   * 知识网长成了课件的结构图。
+   *
+   * **只加不删**：已有的链接不动，重复调用是幂等的。
+   *
+   * @param {{topic?: string, minSize?: number}} [options]
+   * @returns {{ok: boolean, groups: number, linked: number, skipped: number, cards: number}}
+   */
+  function linkSourceGroups({ topic, minSize = 2, key } = {}) {
+    const groups = sourceGroups({ topic }).filter(group => group.count >= minSize)
+    const scoped = key ? groups.filter(group => group.key === key) : groups
+    const touched = new Map()
+    const observed = new Map()
+    const load = slug => {
+      if (touched.has(slug)) return touched.get(slug)
+      observed.set(slug, statFile(topicFile(slug)))
+      const entries = readEntries(slug)
+      touched.set(slug, entries)
+      return entries
+    }
+
+    let linked = 0
+    let skipped = 0
+    for (const group of scoped) {
+      // 链**不跨主题**：同一份出处但不同主题的卡（比如「模型知识」这组里
+      // 有 C# 的卡也有面试的卡）不该串成一条链 —— 那条链会把两个不相关的
+      // 知识点连起来（2026-10-30 用户实测：3 张 C# 卡各成一组、连不上）。
+      // 所以按「组 + 主题」分别成链。
+      const byTopic = new Map()
+      for (const card of group.cards) {
+        const bucket = byTopic.get(card.topic) || []
+        bucket.push(card)
+        byTopic.set(card.topic, bucket)
+      }
+      for (const cards of byTopic.values()) {
+        for (let i = 0; i < cards.length - 1; i++) {
+          const from = cards[i]
+          const to = cards[i + 1]
+          const entries = load(from.topic)
+          const entry = entries.find(item => item.id === from.id)
+          if (!entry) continue
+          const links = Array.isArray(entry.links) ? entry.links : []
+          if (links.some(item => item && item.id === to.id)) {
+            skipped++
+            continue
+          }
+          links.push({
+            id: to.id,
+            title: to.title,
+            from: 'auto',
+            why: `同一份《${group.ref}》`,
+          })
+          if (links.length > LINK_MAX) links.length = LINK_MAX
+          entry.links = links
+          entry.updatedAt = now()
+          linked++
+        }
+      }
+    }
+
+    const failed = []
+    for (const [slug, entries] of touched) {
+      try {
+        assertUnchanged(slug, observed.get(slug))
+        writeEntries(slug, entries)
+      } catch {
+        failed.push(slug)
+      }
+    }
+    return {
+      ok: true,
+      groups: scoped.length,
+      linked,
+      skipped,
+      cards: scoped.reduce((sum, group) => sum + group.count, 0),
+      failed,
+    }
+  }
+
+  /**
+   * 会话「最近碰过的卡」：本会话写入/更新过的 + 最近检索命中的。
+   *
+   * 为什么记这个：用户刚建完一张卡，紧接着问一个更深的问题，
+   * 新卡最该连的就是「刚建的那张」—— 但模型只能凭对话记忆去猜那张卡的标题，
+   * 经常猜错或干脆不连。这里把它变成结构化的候选。
+   *
+   * @param {string} sessionId
+   * @returns {string[]} 卡片 id（最近的在前）
+   */
+  function recentCards(sessionId, limit = 12) {
+    if (!sessionId) return []
+    const binding = readBindings()[sessionId]
+    const recent = binding && Array.isArray(binding.recent) ? binding.recent : []
+    return recent.slice(0, limit)
+  }
+
+  /**
+   * 记下本会话碰过的卡（写入成功后调用）。
+   * @param {string} sessionId
+   * @param {string[]} ids 卡片 id
+   */
+  function rememberCards(sessionId, ids) {
+    if (!sessionId) return
+    const list = Array.isArray(ids) ? ids.filter(Boolean).map(String) : []
+    if (!list.length) return
+    const bindings = readBindings()
+    const binding = bindings[sessionId] || { topic: null, updatedAt: now() }
+    const recent = [ ...new Set([...list, ...(Array.isArray(binding.recent) ? binding.recent : [])]) ].slice(0, 20)
+    binding.recent = recent
+    binding.updatedAt = now()
+    bindings[sessionId] = binding
+    writeBindings(bindings)
+  }
+
+  /**
+   * 写入预览里的「建议关联」候选。
+   *
+   * 四路来源，按可信度排：
+   *   ① 同批次的其它卡        —— 同一节课件里一起整理出来的，几乎不会错
+   *   ② 本会话刚建/刚写的卡     —— 用户正在往下钻，最该连的就是它
+   *   ③ 库里相近的卡           —— 靠判据猜，只作参考（默认不勾）
+   *
+   * 每条候选都带**理由**（why）：没理由的建议用户不会信。
+   *
+   * @param {{topic: string, cards: object[], sessionId?: string}} options
+   * @returns {{title: string, candidates: object[]}[]}
+   */
+  function suggestLinks({ topic, cards, sessionId } = {}) {
+    const list = Array.isArray(cards) ? cards : []
+    if (!list.length) return []
+    const entries = allEntries().filter(entry => (entry.status || 'active') === 'active')
+    const byId = new Map(entries.map(entry => [entry.id, entry]))
+    const cachedFeatures = featureCache()
+    const recent = recentCards(sessionId).map(id => byId.get(id)).filter(Boolean)
+    // 标签在全库出现多少次：判据里「同标签簇」要用它（小标签簇才算证据）
+    const tagCount = new Map()
+    for (const entry of entries) {
+      for (const tag of Array.isArray(entry.tags) ? entry.tags : []) {
+        tagCount.set(tag, (tagCount.get(tag) || 0) + 1)
+      }
+    }
+    const out = []
+
+    for (const card of list) {
+      const title = String(card?.title || '').trim()
+      if (!title) continue
+      const body = String(card?.body || '')
+      const tags = Array.isArray(card?.tags) ? card.tags : []
+      const features = cardFeatures({ title, body, tags })
+      const candidates = []
+      const seen = new Set()
+
+      // ① 同批次的同源卡不在这儿给建议 —— 它们由 planSave 自动连成链
+      //    （同一节课件的卡本来就是一条线，不该让用户在预览里逐条勾 40 次）。
+      //    同批次但**不同源**的卡也交给模型自己写 [[..]]，机器不猜。
+
+      // ② 本会话刚碰过的卡
+      for (const entry of recent) {
+        if (seen.has(entry.title)) continue
+        const verdict = judgeRelated(
+          { features, tags },
+          { features: cachedFeatures.get(entry.id) || cardFeatures({ title: entry.title, body: entry.body || '', tags: entry.tags || [] }), tags: entry.tags || [] },
+          tagCount,
+        )
+        if (!verdict) continue
+        seen.add(entry.title)
+        candidates.push({
+          title: entry.title,
+          id: entry.id,
+          topic: entry.topic,
+          topicName: entry.topicName,
+          why: `跟刚建的那张《${entry.title}》一路`,
+          confidence: 'high',
+        })
+        if (candidates.length >= 6) break
+      }
+
+      // ③ 库里相近的（弱，只作参考）
+      const similar = entries
+        .filter(entry => entry.topic !== topic && !seen.has(entry.title))
+        .map(entry => ({
+          entry,
+          score: judgeRelated(
+            { features, tags },
+            { features: cachedFeatures.get(entry.id) || cardFeatures({ title: entry.title, body: entry.body || '', tags: entry.tags || [] }), tags: entry.tags || [] },
+            tagCount,
+          ),
+        }))
+        .filter(item => item.score)
+        .sort((a, b) => b.score.score - a.score.score)
+        .slice(0, 2)
+      for (const item of similar) {
+        candidates.push({
+          title: item.entry.title,
+          id: item.entry.id,
+          topic: item.entry.topic,
+          topicName: item.entry.topicName,
+          why: '其它主题已有相近条目',
+          confidence: 'low',
+        })
+      }
+
+      if (candidates.length) out.push({ title, candidates })
+    }
+    return out
+  }
+
+  /**
+   * 工具给的 links：标题数组或 {id,title} 数组 → 统一的 {id,title,from} 列表。
+   *
+   * from 保留住（manual / auto）—— 界面上要区分「我挂的」和「机器连的」。
+   */
+  function normalizeManualLinks(raw) {
+    const out = []
+    const seen = new Set()
+    for (const item of Array.isArray(raw) ? raw : []) {
+      const isObject = item && typeof item === 'object'
+      const id = isObject ? String(item.id || '').trim() : ''
+      const title = isObject ? String(item.title || '').trim() : String(item || '').trim()
+      const from = isObject && item.from ? String(item.from) : 'manual'
+      const why = isObject && item.why ? String(item.why) : ''
+      if (!id && !title) continue
+      const key = id ? 'id:' + id : 't:' + normalizeLinkTitle(title)
+      if (seen.has(key)) continue
+      seen.add(key)
+      const link = id ? { id, title, from } : { id: '', title, from }
+      if (why) link.why = why
+      out.push(link)
+      if (out.length >= LINK_MAX) break
+    }
+    return out
+  }
+
+  /**
+   * 算出一张卡片的链接清单：手动链接 + 正文引用。
+   *
+   * - 手动链接：模型显式给了 links 就按给的；没给就沿用原来的
+   *   （模型重写一张卡，不该顺手把链接抹掉）。
+   * - 正文引用：每次写都重算，但先认旧的（按 raw 对上）——
+   *   目标卡改了名，链接不能因为一次改名就断掉。
+   */
+  function computeLinks({ body, manualRaw, oldLinks, index, topic }) {
+    const out = []
+    const seen = new Set()
+    const push = item => {
+      const key = item.id ? 'id:' + item.id : 't:' + normalizeLinkTitle(item.title || '')
+      if (seen.has(key)) return
+      seen.add(key)
+      out.push(item)
+    }
+
+    const old = Array.isArray(oldLinks) ? oldLinks : []
+    // 没给 links 就沿用原来的（手动挂的和自动关联的都留着，只有正文引用会重算）
+    const manualSource = Array.isArray(manualRaw)
+      ? normalizeManualLinks(manualRaw)
+      : old.filter(item => item && item.from !== 'body')
+    for (const item of manualSource) {
+      const hit =
+        (item.id && index && index.byId ? index.byId.get(item.id) || null : null) ||
+        resolveRef(item.title, index, { topic })
+      push({
+        id: hit ? hit.id : item.id || '',
+        title: hit ? hit.title : item.title || '',
+        from: item.from || 'manual',
+      })
+    }
+
+    for (const item of deriveBodyLinks(body, index, old, topic)) {
+      push(item)
+    }
+
+    return out.slice(0, LINK_MAX)
+  }
+
+  /**
+   * 全库链接图：每张卡 → { links: 正向, backlinks: 反向 }。
+   *
+   * 算一次就够（底层是 linkSnapshot，按文件时间缓存）——
+   * 工具层一次要给几十条卡片挂关系时，不能每条都重扫一遍全库。
+   *
+   * @returns {Map<string, {links: object[], backlinks: object[]}>}
+   */
+  function linkMap() {
+    const snapshot = linkSnapshot()
+    const map = new Map()
+    for (const entry of snapshot.entries) {
+      map.set(entry.id, { links: resolveEntryLinks(entry, snapshot.index), backlinks: [] })
+    }
+    for (const entry of snapshot.entries) {
+      const bucket = map.get(entry.id)
+      if (!bucket) continue
+      for (const link of bucket.links) {
+        if (!link.id) continue
+        const target = map.get(link.id)
+        if (!target) continue
+        target.backlinks.push({
+          id: entry.id,
+          title: entry.title,
+          topic: entry.topic || null,
+          topicName: entry.topicName || null,
+        })
+      }
+    }
+    return map
+  }
+
+  /**
+   * 一张卡片的链接：正向（它连着谁）+ 反向（谁连着它）。
+   *
+   * @param {{id: string, topic?: string}} options
+   * @returns {{id: string, topic: string, title: string, links: object[], backlinks: object[]}}
+   */
+  function cardLinks({ id, topic }) {
+    const slug = topic ? resolveSlug(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(item => item.slug)
+    let found = null
+    let foundTopic = null
+    for (const candidate of candidates) {
+      const entry = readEntries(candidate).find(item => item.id === id)
+      if (entry) {
+        found = entry
+        foundTopic = candidate
+        break
+      }
+    }
+    if (!found) throw new Error(`找不到条目 ${id}`)
+
+    const snapshot = linkSnapshot()
+    const entry = {
+      ...found,
+      topic: found.topic || foundTopic,
+      topicName: topicNameOf(foundTopic),
+    }
+    const backlinks = backlinksOf(found.id, snapshot.entries, snapshot.index).map(item => ({
+      id: item.id,
+      title: item.title,
+      topic: item.topic || null,
+      topicName: item.topicName || null,
+    }))
+    return {
+      id: found.id,
+      topic: entry.topic,
+      topicName: entry.topicName,
+      title: found.title,
+      links: linkRows(entry, snapshot.index),
+      backlinks,
+    }
+  }
+
+  /**
+   * 手动挂一条链接。目标可以是条目 id，也可以是卡片标题。
+   * 挂上了就是「手动链接」：不受正文改动影响，界面里能单独删掉。
+   */
+  function addLink({ id, topic, target }) {
+    const raw = String(target ?? '').trim()
+    if (!raw) throw new Error('要链接的目标不能为空')
+    const snapshot = linkSnapshot()
+    const hit = resolveRef(raw, snapshot.index, { topic: topic ? resolveSlug(topic) : null })
+    if (!hit) throw new Error(`找不到要链接的卡片：${raw}`)
+
+    const slug = topic ? resolveSlug(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(item => item.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (!entry) continue
+      assertUnchanged(candidate, observed)
+      if (hit.id === entry.id) throw new Error('不能链接到卡片自己')
+      const links = Array.isArray(entry.links) ? entry.links.slice() : []
+      const key = 'id:' + hit.id
+      // 已经连上了（不管是正文里写的还是之前挂的）→ 不重复加一行，只回报一声
+      if (links.some(item => item && 'id:' + item.id === key)) {
+        return {
+          ok: true,
+          already: true,
+          topic: candidate,
+          id: entry.id,
+          title: entry.title,
+          target: { id: hit.id, title: hit.title },
+        }
+      }
+      links.push({ id: hit.id, title: hit.title, from: 'manual' })
+      if (links.length > LINK_MAX) links.length = LINK_MAX
+      entry.links = links
+      entry.updatedAt = now()
+      writeEntries(candidate, entries)
+      return { ok: true, already: false, topic: candidate, id: entry.id, title: entry.title, target: { id: hit.id, title: hit.title } }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /**
+   * 拆掉一条手动链接。
+   *
+   * 只拆「手动链接」。正文里的 [[..]] 是活的 —— 要改它得改正文，
+   * 界面里会标出「来自正文」，不给删除按钮，免得用户点了发现没反应。
+   */
+  function removeLink({ id, topic, target }) {
+    const raw = String(target ?? '').trim()
+    if (!raw) throw new Error('要拆的链接目标不能为空')
+    const slug = topic ? resolveSlug(topic) : null
+    const candidates = slug ? [slug] : listTopics().map(item => item.slug)
+    for (const candidate of candidates) {
+      const observed = statFile(topicFile(candidate))
+      const entries = readEntries(candidate)
+      const entry = entries.find(item => item.id === id)
+      if (!entry) continue
+      assertUnchanged(candidate, observed)
+      const before = Array.isArray(entry.links) ? entry.links.length : 0
+      const key = normalizeLinkTitle(raw)
+      entry.links = (Array.isArray(entry.links) ? entry.links : []).filter(item => {
+        if (!item) return false
+        if (item.id && item.id === raw) return false
+        return normalizeLinkTitle(item.title || '') !== key
+      })
+      if (entry.links.length !== before) {
+        entry.updatedAt = now()
+        writeEntries(candidate, entries)
+      }
+      return { ok: true, topic: candidate, id: entry.id, title: entry.title }
+    }
+    throw new Error(`找不到条目 ${id}`)
+  }
+
+  /**
+   * 扫一遍全库，把「该连的」连上（面板上的「扫描关联」按钮走这里）。
+   *
+   * **判据是「同一份出处」**（2026-10-30 改）：原来这按钮用相似度猜，
+   * 在真库上会连出 196 条跨组的弱边（「纯虚函数 ↔ inline 内联」那种）——
+   * 用户嫌「关联不怎么样」的根因就是这个。现在只连「同一份课件/文件」的卡，
+   * 按页码连成链：**机器只写事实性关系，语义性关系一律走「建议关联」由人裁决。**
+   *
+   * **只加不删**：已经有的链接一律不动 —— 用户自己挂的、模型正文里写的、
+   * 上一轮扫出来的都保留；第二次扫是幂等的（同一对只连一次）。
+   * 不自动连、也不自动断，是这个按钮的语义：**它只补网，不拆网**。
+   *
+   * @returns {{ok: boolean, added: number, existed: number, groups: number, cards: number}}
+   */
+  function scanRelations() {
+    const result = linkSourceGroups()
+    return {
+      ok: true,
+      added: result.linked,
+      existed: result.skipped,
+      groups: result.groups,
+      cards: result.cards,
+      failed: result.failed,
+    }
+  }
+
   return {
     root,
     listTopics,
+    topicColorOf,
     findTopic,
     createTopic,
     updateTopic,
@@ -1745,6 +2547,22 @@ export function createStore(root) {
     getDefaultTopic,
     getAiModel,
     setAiModel,
+    // 卡片互链：正向链接 + 反向链接
+    cardLinks,
+    addLink,
+    removeLink,
+    // 全库链接图（一次算完，给工具层挂关系用）
+    linkMap,
+    // 全库扫描关联（面板的「扫描关联」按钮）
+    scanRelations,
+    // 出处分组：同源成组（面板分组浏览 + 组头一键连组）
+    sourceGroups,
+    sourceGroupOf,
+    linkSourceGroups,
+    // 会话最近碰过的卡 + 写入预览里的建议关联
+    recentCards,
+    rememberCards,
+    suggestLinks,
     // 改 / 删条目的工具默认不暴露给模型（省 schema；用户明确说不需要）
     getKbEditTools,
     markPreviewed,

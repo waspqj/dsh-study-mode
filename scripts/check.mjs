@@ -604,7 +604,117 @@ if (!toolsSource.includes('kbTokens')) {
   }
 }
 
-// 7. CHANGELOG 必须跟版本对得上（2026-10-27 用户要求：每次发布都要更新更新日志）
+// 7. 卡片互链接线（2026-10-29：按同类项目调研结论补的能力）
+//
+//    互链要成立，链子得是通的：
+//      宿主半侧：/links 给出正向 + 反向链接，/link 负责挂 / 拆
+//      存储层：条目上的 links 清单（手动链接 + 正文引用）
+//      浏览器半侧：详情浮层显示「链接 / 被引用」，正文里的 [[..]] 是可点的
+//      工具层：learn_save 的 cards 接受 links 字段，persona 教模型写 [[标题]]
+{
+  const linksText = fs.readFileSync(path.join(root, 'plugin', 'links.js'), 'utf8')
+  for (const bit of ['parseLinkRefs', 'buildLinkIndex', 'resolveRef', 'resolveEntryLinks', 'backlinksOf', 'deriveBodyLinks']) {
+    if (!linksText.includes(bit)) fail(`plugin/links.js 缺少 ${bit}：互链的解析层不能少这一块`)
+  }
+  const storeText = fs.readFileSync(path.join(root, 'plugin', 'store.js'), 'utf8')
+  for (const bit of ['cardLinks', 'addLink', 'removeLink', 'computeLinks', 'linkMap']) {
+    if (!storeText.includes(bit)) fail(`plugin/store.js 缺少 ${bit}：互链的存储层没接上`)
+  }
+  // 关联必须**给模型看见**（抄 dsh-eli-mode 的 kb_read：返回里带「关联 / 反向关联」）
+  // —— 建了网模型却看不见，等于白建。
+  const linkTools = fs.readFileSync(path.join(root, 'plugin', 'tools.js'), 'utf8')
+  for (const bit of ['attachRelations', 'renderRelations', 'store.linkMap()']) {
+    if (!linkTools.includes(bit)) fail(`plugin/tools.js 缺少 ${bit}：模型看不到卡片之间的关联`)
+  }
+  const hostText = fs.readFileSync(path.join(root, 'plugin', 'index.js'), 'utf8')
+  for (const bit of ["'/links'", "'/link'", 'handleLinks', 'handleLink']) {
+    if (!hostText.includes(bit)) fail(`plugin/index.js 缺少 ${bit}：宿主接口没接上，界面就取不到链接`)
+  }
+  const linkClient = fs.readFileSync(path.join(root, 'client', 'index.js'), 'utf8')
+  for (const bit of ['kb-links', 'kb-linkref', 'loadLinks', 'linkMap']) {
+    if (!linkClient.includes(bit)) fail(`client/index.js 缺少 ${bit}：互链的界面没接上`)
+  }
+  for (const key of ['linksTitle', 'backlinksTitle', 'linkAdd', 'linkRemove']) {
+    if ((linkClient.match(new RegExp(key + ':', 'g')) || []).length < 2) {
+      fail(`client/index.js 词典缺少 ${key}：中英两段都要有这个键`)
+    }
+  }
+  const toolsText = fs.readFileSync(path.join(root, 'plugin', 'tools.js'), 'utf8')
+  if (!toolsText.includes('links:')) {
+    fail('plugin/tools.js 的 learn_save 卡片参数缺少 links：模型没法显式建链')
+  }
+  const patchText2 = fs.readFileSync(path.join(root, 'cordis.patch.yml'), 'utf8')
+  if (!patchText2.includes('[[')) {
+    fail('cordis.patch.yml 的 persona 没教模型写 [[卡片标题]]：没有这一步，模型不会建链')
+  }
+}
+
+// 8. 「扫描关联」接线（2026-10-29 加的：面板上一键把相关卡片连起来）
+//
+//    这条链有四段，少一段按钮就是哑的：
+//      判据层 plugin/relate.js → 存储层 store.scanRelations
+//      → 宿主路由 POST /kb/api/relate → 浏览器半侧的「扫描关联」按钮
+{
+  const relateText = fs.readFileSync(path.join(root, 'plugin', 'relate.js'), 'utf8')
+  // 2026-10-30：批量写链接改成「按出处」（事实），相似度判据只服务「建议关联」（人裁决），
+  // 所以 relatedPairs / RELATE_TOP 已经删掉 —— 判据层现在只剩这两块。
+  for (const bit of ['cardFeatures', 'judgeRelated']) {
+    if (!relateText.includes(bit)) fail(`plugin/relate.js 缺少 ${bit}：关联判据层不能少这一块`)
+  }
+  // 反过来守着：相似度判据不许再被用来批量写链接
+  if (relateText.includes('relatedPairs')) {
+    fail('plugin/relate.js 里还有 relatedPairs：相似度批量写链接已经废止（2026-10-30），只剩建议关联在用判据')
+  }
+  const storeText2 = fs.readFileSync(path.join(root, 'plugin', 'store.js'), 'utf8')
+  for (const bit of ['scanRelations', "from: 'auto'"]) {
+    if (!storeText2.includes(bit)) fail(`plugin/store.js 缺少 ${bit}：扫描关联的存储层没接上`)
+  }
+  const hostText2 = fs.readFileSync(path.join(root, 'plugin', 'index.js'), 'utf8')
+  for (const bit of ["'/relate'", 'handleRelate']) {
+    if (!hostText2.includes(bit)) fail(`plugin/index.js 缺少 ${bit}：扫描接口没接上，按钮点了没反应`)
+  }
+  const clientText2 = fs.readFileSync(path.join(root, 'client', 'index.js'), 'utf8')
+  for (const bit of ['scanRelations', 'relateScan', "apiPost('/relate'"]) {
+    if (!clientText2.includes(bit)) fail(`client/index.js 缺少 ${bit}：面板的扫描按钮没接上`)
+  }
+  for (const key of ['relateScan', 'relateDone', 'linkAuto']) {
+    if ((clientText2.match(new RegExp(key + ':', 'g')) || []).length < 2) {
+      fail(`client/index.js 词典缺少 ${key}：中英两段都要有这个键`)
+    }
+  }
+}
+
+// 9. 出处分组 + 建议关联（2026-10-29 用户场景：刚建完卡，接着问更深的问题，
+//    生成新卡预览时该建议它跟上一个建立关联）
+{
+  const storeText3 = fs.readFileSync(path.join(root, 'plugin', 'store.js'), 'utf8')
+  for (const bit of ['sourceGroups', 'sourceGroupOf', 'linkSourceGroups', 'suggestLinks', 'rememberCards', 'recentCards', 'batchSources']) {
+    if (!storeText3.includes(bit)) fail(`plugin/store.js 缺少 ${bit}：出处分组/建议关联的存储层没接上`)
+  }
+  const hostText3 = fs.readFileSync(path.join(root, 'plugin', 'index.js'), 'utf8')
+  for (const bit of ["'/groups'", "'/relate/group'", 'handleGroups', 'handleRelateGroup', 'mergeChosenLinks']) {
+    if (!hostText3.includes(bit)) fail(`plugin/index.js 缺少 ${bit}：分组/建议关联的接口没接上`)
+  }
+  const groupClient = fs.readFileSync(path.join(root, 'client', 'index.js'), 'utf8')
+  for (const bit of ['kb-srcgroup', 'groupRows', 'linkGroup', 'suggestMap', 'pickedFor', 'toggleSuggest', 'chosenLinks', 'batchSources']) {
+    if (!groupClient.includes(bit)) fail(`client/index.js 缺少 ${bit}：分组浏览/建议关联的界面没接上`)
+  }
+  for (const key of ['groupBySource', 'groupLink', 'groupSame', 'suggestTitle']) {
+    if ((groupClient.match(new RegExp(key + ':', 'g')) || []).length < 2) {
+      fail(`client/index.js 词典缺少 ${key}：中英两段都要有这个键`)
+    }
+  }
+  // 组内的卡片必须还是**两列**（跟平铺时一样大）。
+  // 2026-10-30 用户实测反馈「卡片怎么变大了」：组容器写成了单列 flex，
+  // 把两列网格压成了一列 —— 这条闸门就是为了不让它再退化。
+  const gridRule = groupClient.match(/\.kb-srcgroup-body\{[^}]*\}/)
+  if (!gridRule) fail('client/index.js 缺少 .kb-srcgroup-body 的样式')
+  else if (!/display:grid/.test(gridRule[0]) || !/repeat\(2,/.test(gridRule[0])) {
+    fail('client/index.js 的 .kb-srcgroup-body 不是两列网格：分组后卡片会比平铺时大（2026-10-30 用户反馈）')
+  }
+}
+
+// 10. CHANGELOG 必须跟版本对得上（2026-10-27 用户要求：每次发布都要更新更新日志）
 //
 //    放在 check.mjs 里，是因为它是发布流程的**闸门**：
 //    没更新 CHANGELOG → 自检不过 → 发布会停在这一步，而不是发出去一个
@@ -641,4 +751,4 @@ if (problems.length) {
   for (const problem of problems) console.error('  - ' + problem)
   process.exit(1)
 }
-console.log('自检通过：插件可加载且导出正确、工具参数是标准 JSON Schema、persona 关键规则齐全、工具无重复挂载、知识库 UI 三处接线一致、跨版本兼容探针接线完整、改名能力接线完整、入库批次与展开体验接线完整、CHANGELOG 与版本一致。')
+console.log('自检通过：插件可加载且导出正确、工具参数是标准 JSON Schema、persona 关键规则齐全、工具无重复挂载、知识库 UI 三处接线一致、跨版本兼容探针接线完整、改名能力接线完整、入库批次与展开体验接线完整、卡片互链接线完整、扫描关联接线完整、出处分组与建议关联接线完整、CHANGELOG 与版本一致。')

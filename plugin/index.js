@@ -208,6 +208,10 @@ function handleOverview() {
       // 主题编辑弹窗要显示这两项：领域能改，旧名字要列出来（改完老名字仍然有效）
       domain: topic.domain,
       aliases: topic.aliases,
+      // 主题颜色：建主题时定的，写在主题元数据里 → 不同主题不撞色，
+      // 而且主题增删/改名都不会动别人的颜色（2026-10-30 用户实测撞色后改的）。
+      // **这个字段一定要传出去** —— 面板左栏圆点、卡片色条全靠它。
+      color: topic.color,
       count: topic.count,
       activeCount: topic.activeCount,
       archivedCount: Math.max(0, topic.count - topic.activeCount),
@@ -295,6 +299,114 @@ function handleEntry(params) {
     }
   }
   return { ok: true, entry: null }
+}
+
+/**
+ * 一张卡片的链接：正向（它连着谁）+ 反向（谁连着它）。
+ *
+ * 界面打开卡片详情时打这个接口：正文里的 [[某某]] 要知道指谁，
+ * 还得知道「谁引用了这条」—— 后者模型看不到，是这张卡的价值所在。
+ *
+ * @param {URLSearchParams} params
+ * @returns {{ok: boolean, links: object[], backlinks: object[]}}
+ */
+function handleLinks(params) {
+  const id = String(params.get('id') || '').trim()
+  if (!id) return { ok: false, error: 'id 不能为空' }
+  const topic = String(params.get('topic') || '').trim()
+  return { ok: true, ...store().cardLinks({ id, topic: topic || undefined }) }
+}
+
+/**
+ * 挂 / 拆一条手动链接。
+ *
+ * @param {object} body {id, topic?, target, remove?}
+ * @returns {{ok: boolean}}
+ */
+function handleLink(body) {
+  const id = asId(body.id)
+  const topic = body.topic ? String(body.topic).trim() : undefined
+  const target = String(body.target || '').trim()
+  if (!target) return { ok: false, error: 'target 不能为空' }
+  if (body.remove) return { ok: true, ...store().removeLink({ id, topic, target }) }
+  return { ok: true, ...store().addLink({ id, topic, target }) }
+}
+
+/**
+ * 出处分组：同一份文件/课件的卡归一组（面板按出处浏览 + 详情里的「同组 N 张」）。
+ *
+ * @param {URLSearchParams} params ?topic=
+ */
+function handleGroups(params) {
+  const topic = String(params.get('topic') || '').trim()
+  const scoped = topic && topic !== 'all' ? { topic } : {}
+  const groups = store().sourceGroups(scoped)
+  const graph = store().linkMap()
+  return {
+    ok: true,
+    groups: groups.map(group => {
+      // 组内已经连上的边数：界面上据此显示「已连成一组」，不再重复给按钮
+      const ids = new Set(group.cards.map(card => card.id))
+      let linked = 0
+      // 已经连上链的卡（连到了**同一主题里**的下一张）：界面按「显示出来的卡」
+      // 判断「这一组已经连成一条链了」—— 组是跨主题的，光看总数会串。
+      const chained = []
+      for (let i = 0; i < group.cards.length; i++) {
+        const card = group.cards[i]
+        const bucket = graph.get(card.id)
+        if (!bucket) continue
+        for (const link of bucket.links) {
+          if (link.id && ids.has(link.id)) linked++
+        }
+        const next = group.cards[i + 1]
+        if (next && next.topic === card.topic && bucket.links.some(link => link.id === next.id)) {
+          chained.push(card.id)
+        }
+      }
+      return {
+        key: group.key,
+        ref: group.ref,
+        type: group.type,
+        count: group.count,
+        linked,
+        chained,
+        cards: group.cards.map(card => ({
+          id: card.id,
+          title: card.title,
+          topic: card.topic,
+          topicName: card.topicName,
+          locator: card.locator,
+        })),
+      }
+    }),
+  }
+}
+
+/**
+ * 把同组的卡连成链（面板组头的「连成一组」按钮走这里）。
+ *
+ * 只加不删，重复点不会连出第二遍。
+ */
+function handleRelateGroup(body) {
+  const topic = String(body?.topic || '').trim()
+  const key = String(body?.key || '').trim()
+  return store().linkSourceGroups({
+    topic: topic && topic !== 'all' ? topic : undefined,
+    key: key || undefined,
+  })
+}
+
+/**
+ * 扫描一遍全库，把「该连的」连上（面板上的「扫描关联」按钮）。
+ *
+ * 只加不删：已有的链接一律保留，第二次扫是幂等的。
+ *
+ * @param {object} body {top?: number}
+ * @returns {{ok: boolean, added: number, existed: number, pairs: number, hubs: object[]}}
+ */
+function handleRelate(body) {
+  const top = Number(body?.top)
+  return store().scanRelations({ top: Number.isInteger(top) && top > 0 ? top : undefined })
 }
 
 function handleSearch(params) {
@@ -632,7 +744,7 @@ function handleSaveBatch(body) {
 
   const result = kb.planSave({
     topic: batch.topicArg || undefined,
-    cards,
+    cards: mergeChosenLinks(cards, body?.links),
     sessionId: batch.sessionId,
     dryRun: false,
   })
@@ -664,6 +776,38 @@ function httpError(status, message) {
   const error = new Error(message)
   error.status = status
   return error
+}
+
+/**
+ * 把用户在预览里勾选的关联合并进这批卡片。
+ *
+ * 预览里每一张卡下面有「建议关联」的勾选框，用户勾完点「确认写入」时
+ * 把勾选结果带回来（body.links = [{title, links:[目标标题]}]）。
+ * 没勾的就不写 —— **建议只是建议，写不写由用户定**。
+ *
+ * @param {object[]} cards 这批卡片
+ * @param {unknown} chosen 用户勾选的关联
+ * @returns {object[]} 合并后的卡片
+ */
+function mergeChosenLinks(cards, chosen) {
+  if (!Array.isArray(chosen) || !chosen.length) return cards
+  const byTitle = new Map()
+  for (const item of chosen) {
+    const title = String(item?.title || '').trim()
+    const links = Array.isArray(item?.links) ? item.links.map(value => String(value)).filter(Boolean) : []
+    if (!title || !links.length) continue
+    byTitle.set(title, links)
+  }
+  if (!byTitle.size) return cards
+  return cards.map(card => {
+    const picked = byTitle.get(String(card?.title || '').trim())
+    if (!picked) return card
+    const merged = Array.isArray(card.links) ? card.links.slice() : []
+    for (const title of picked) {
+      if (!merged.includes(title)) merged.push(title)
+    }
+    return { ...card, links: merged }
+  })
 }
 
 const UPDATABLE = ['title', 'body', 'q', 'tags', 'kind', 'appliesTo', 'verified']
@@ -1101,6 +1245,9 @@ const POST_ROUTES = {
   '/card/verify': body => handleCardVerify(body),
   '/card/verify-batch': body => handleCardVerifyBatch(body),
   '/card/rollback': body => handleCardRollback(body),
+  '/link': body => handleLink(body),
+  '/relate': body => handleRelate(body),
+  '/relate/group': body => handleRelateGroup(body),
   '/ai-model': body => handleAiModelSet(body),
 }
 
@@ -1132,6 +1279,10 @@ export function createHandler({ getOrigin = () => '', ctx = null } = {}) {
         if (route === '/entries') return sendJson(res, 200, handleEntries(url.searchParams))
         // 单条详情：列表只给 160 字摘要，正文全文在这里单独取（审计 P1-8）
         if (route === '/entry') return sendJson(res, 200, handleEntry(url.searchParams))
+        // 卡片互链：正向（它连着谁）+ 反向（谁连着它）
+        if (route === '/links') return sendJson(res, 200, handleLinks(url.searchParams))
+        // 出处分组：同一份文件/课件的卡归一组（面板按出处浏览 + 详情里的「同组 N 张」）
+        if (route === '/groups') return sendJson(res, 200, handleGroups(url.searchParams))
         if (route === '/search') return sendJson(res, 200, handleSearch(url.searchParams))
         // 当前会用它做校验的是哪个模型：界面在打开校验面板时先问一次，
         // 这样用户不用等校验跑完就知道"对齐没对齐"。

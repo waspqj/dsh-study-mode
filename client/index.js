@@ -47,7 +47,7 @@ window.__ModuleLoader__.load({
     // 只做了「包进函数」这一件事，避免大范围改动引入新风险。
     function install(React, exports) {
     const h = React.createElement
-    const { useState, useEffect, useRef, useCallback } = React
+    const { useState, useEffect, useRef, useCallback, useMemo } = React
     // useLayoutEffect：真实 React 里有，但浏览器半侧只保证能 require('react')，
     // 不保证宿主给的 React 对象带这个钩子 —— 没有就退回 useEffect
     // （效果差一点点：还原滚动位置会晚一帧，但不会崩）。
@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.23'
+    const UI_REV = '0.3.24'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -160,6 +160,30 @@ window.__ModuleLoader__.load({
         saveConfirmAll: '全部写入',
         showMore: '再看',
         unitCards: '条',
+        // 卡片互链
+        linksTitle: '链接',
+        backlinksTitle: '被引用',
+        linkEmpty: '这张卡还没有连着别的卡',
+        backlinkEmpty: '还没有别的卡引用它',
+        linkUnresolved: '还没找到对应的卡片',
+        linkFromBody: '来自正文',
+        linkAdd: '挂上',
+        linkAddPlaceholder: '输入卡片标题，回车挂上',
+        linkRemove: '拆掉这条链接',
+        linkAuto: '自动关联',
+        relateScan: '按出处补链',
+        relateDoing: '扫描中…',
+        relateDone: '已建立',
+        relateNone: '没有新的关联可加',
+        unitLinks: '条关联',
+        groupBySource: '按出处',
+        groupFlat: '平铺',
+        groupLink: '连成一组',
+        groupLinking: '连接中…',
+        groupLinked: '已连成一组',
+        groupSame: '同组',
+        groupSameEmpty: '这张卡还没有同组的卡',
+        suggestTitle: '建议关联',
         notWritten: '（未写入）',
         saveConfirm: '确认写入',
         saveWriting: '写入中…',
@@ -349,6 +373,30 @@ window.__ModuleLoader__.load({
         saveConfirmAll: 'Write all',
         showMore: 'Show more',
         unitCards: 'cards',
+        // card links
+        linksTitle: 'Links',
+        backlinksTitle: 'Referenced by',
+        linkEmpty: 'This card is not linked to anything yet',
+        backlinkEmpty: 'No card references it yet',
+        linkUnresolved: 'No matching card yet',
+        linkFromBody: 'from body',
+        linkAdd: 'Link',
+        linkAddPlaceholder: 'Card title, Enter to link',
+        linkRemove: 'Remove this link',
+        linkAuto: 'auto',
+        relateScan: 'Link by source',
+        relateDoing: 'Scanning…',
+        relateDone: 'Linked',
+        relateNone: 'Nothing new to link',
+        unitLinks: 'links',
+        groupBySource: 'By source',
+        groupFlat: 'Flat',
+        groupLink: 'Link group',
+        groupLinking: 'Linking…',
+        groupLinked: 'Group linked',
+        groupSame: 'Same source',
+        groupSameEmpty: 'No other card from the same source',
+        suggestTitle: 'Suggested links',
         notWritten: '(not written)',
         saveConfirm: 'Write them',
         saveWriting: 'Writing…',
@@ -556,7 +604,9 @@ window.__ModuleLoader__.load({
 .kb-blocks{word-break:break-word}
 .kb-p{margin:0 0 9px;white-space:pre-wrap}
 .kb-p:last-child{margin-bottom:0}
-.kb-blocks>.kb-p:first-child{font-size:15.5px;font-weight:600;line-height:1.65;margin:0 0 15px;color:var(--dsw-alias-label-primary)}
+/* 首行是「结论」：给它一条左侧强调线 + 稍大的字，一眼知道从哪读起
+   （2026-10-30 用户实测「文字效果不太行，没有突出重点」） */
+.kb-blocks>.kb-p:first-child{font-size:15.5px;font-weight:600;line-height:1.65;margin:0 0 15px;padding-left:10px;border-left:3px solid var(--kb-accent);border-radius:0 6px 6px 0;color:var(--dsw-alias-label-primary)}
 .kb-list{margin:0 0 9px;padding:0;list-style:none}
 .kb-li{display:flex;gap:8px;align-items:flex-start;margin:0 0 7px}
 .kb-li-marker{flex:none;min-width:16px;color:var(--kb-accent);font-weight:700}
@@ -564,8 +614,55 @@ window.__ModuleLoader__.load({
 .kb-quote{margin:0 0 10px;padding:7px 10px;border-left:3px solid var(--dsw-alias-brand-primary);border-radius:0 6px 6px 0;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary)}
 .kb-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;padding:1px 5px;border-radius:5px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 12%,var(--kb-surface,var(--dsw-alias-bg-base)));border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 22%,var(--kb-surface,var(--dsw-alias-bg-base)));color:var(--dsw-alias-label-primary)}
 .kb-strong{font-weight:700}
-mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoration:underline;text-decoration-color:var(--dsw-alias-state-warn-primary);text-decoration-thickness:2px;text-underline-offset:3px;text-decoration-skip-ink:none}
+/* 行首术语（「DNS 解析：…」里的「DNS 解析」）用强调色：扫一眼就知道这段讲什么 */
+.kb-term{font-weight:700;color:var(--kb-accent)}
+/* 【重点】= 真的重点：底色 + 描边 + 半粗。
+   以前是「橙色下划线」—— 那个样子像超链接，用户会以为能点（2026-10-30 用户实测）。 */
+mark.kb-hl-run{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 18%,transparent);color:var(--dsw-alias-label-primary);padding:1px 5px;border-radius:5px;font-weight:600;box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--dsw-alias-state-warn-primary) 45%,transparent);text-decoration:none}
 .kb-more{color:var(--dsw-alias-label-secondary)}
+.kb-linkref{color:var(--dsw-alias-label-primary);border-bottom:1px dashed color-mix(in srgb,var(--dsw-alias-label-primary) 55%,transparent);cursor:pointer}
+.kb-linkref.unresolved{color:var(--dsw-alias-label-secondary);border-bottom-style:dotted;cursor:default}
+.kb-links{margin-top:14px;padding-top:10px;border-top:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:4px}
+.kb-links-head{font-size:11px;color:var(--dsw-alias-label-secondary);margin-top:8px}
+.kb-link-row{display:flex;align-items:center;gap:6px;font-size:12.5px;line-height:1.7}
+.kb-link-title{cursor:pointer;text-decoration:underline;text-underline-offset:2px;text-decoration-color:color-mix(in srgb,var(--dsw-alias-label-primary) 45%,transparent)}
+.kb-link-title.unresolved{opacity:.65;text-decoration-style:dotted;cursor:default}
+.kb-link-tag{flex:none;font-size:10px;line-height:16px;padding:0 5px;border-radius:4px;border:1px solid color-mix(in srgb,var(--dsw-alias-label-primary) 22%,transparent);color:var(--dsw-alias-label-secondary)}
+.kb-links-empty{font-size:12px;color:var(--dsw-alias-label-secondary);opacity:.75}
+.kb-links-add{display:flex;gap:6px;align-items:center;margin-top:6px}
+.kb-links-add .kb-input{flex:1 1 auto;min-width:0}
+.kb-links-error{font-size:11.5px;color:var(--dsw-alias-state-danger-primary,#e5484d)}
+/* 同组那一段：默认收成一行，想看再点开 */
+.kb-links-toggle{display:flex;align-items:center;gap:6px;width:100%;font:inherit;font-size:11px;color:var(--dsw-alias-label-secondary);background:transparent;border:0;padding:4px 0;cursor:pointer;text-align:left;margin-top:8px}
+.kb-links-toggle:hover{color:var(--dsw-alias-label-primary)}
+.kb-links-caret{font-size:9px;opacity:.75;flex:none;width:9px}
+.kb-links-toggle-text{flex:none}
+.kb-links-toggle-ref{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7}
+/* 出处分组：知识库本来就是从一份份课件整理来的，按出处翻比按主题翻更贴近思路。
+   组容器**不加边框、不加内边距** —— 卡片的大小和位置必须跟平铺时一模一样
+   （2026-10-30 用户反馈「卡片怎么变大了」：组容器写成了单列 flex，把两列网格压成了一列）。
+   分组只多一行组头（一条细分隔线）。 */
+.kb-srcgroup{margin:0 0 14px}
+.kb-srcgroup-head{display:flex;align-items:center;gap:8px;width:100%;font-size:12.5px;padding:2px 2px 8px;border-bottom:1px solid var(--kb-line);margin-bottom:10px}
+.kb-srcgroup-toggle{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:8px;font:inherit;font-size:12.5px;text-align:left;background:transparent;border:0;padding:0;cursor:pointer;color:var(--dsw-alias-label-primary)}
+.kb-srcgroup-toggle:hover{color:var(--kb-accent)}
+.kb-srcgroup-caret{font-size:9px;opacity:.7;flex:none;width:9px}
+.kb-srcgroup-title{flex:1 1 auto;min-width:0;font-weight:620;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-srcgroup-count{font-size:11px;font-weight:400;color:var(--dsw-alias-label-secondary);opacity:.85;flex:none}
+.kb-srcgroup-act{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--kb-line);border-radius:6px;padding:2px 7px;cursor:pointer}
+.kb-srcgroup-act:hover{color:var(--dsw-alias-label-primary);border-color:var(--kb-accent)}
+.kb-srcgroup-act[disabled]{opacity:.5;cursor:default}
+.kb-srcgroup-body{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:stretch}
+@media (max-width:820px){.kb-srcgroup-body{grid-template-columns:minmax(0,1fr)}}
+.kb-srcgroup-bar{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.kb-srcgroup-bar button{font:inherit;font-size:11px;color:var(--dsw-alias-label-secondary);background:transparent;border:1px solid var(--kb-line);border-radius:6px;padding:2px 8px;cursor:pointer}
+.kb-srcgroup-bar button.on{color:var(--dsw-alias-label-primary);border-color:var(--kb-accent);background:color-mix(in srgb,var(--kb-accent) 14%,transparent)}
+/* 写入预览里的「建议关联」 */
+.kb-suggest{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:6px;font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+.kb-suggest-label{opacity:.8}
+.kb-suggest-item{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--kb-line);border-radius:999px;padding:2px 8px;background:var(--kb-card)}
+.kb-suggest-item input{margin:0;transform:translateY(1px)}
+.kb-suggest-why{opacity:.7}
 .kb-modal-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--kb-modal-bg,var(--dsw-alias-bg-overlay))}
 .kb-modal-foot .kb-btn{font-size:13px;padding:5px 12px}
 .kb-modal-meta{font-size:12px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
@@ -910,9 +1007,19 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     // ---------------------------------------------------------------- 条目卡片
     // 每个主题一个颜色：用于左栏圆点、选中态和卡片左侧色条；
     // 不用 --dsw-alias-brand-primary——本机 open-sea 皮肤里它是近白色，混出来全是白。
+    //
+    // 颜色**跟着主题走**（宿主在建主题时定好，写进主题元数据）：
+    // 以前这里是「拿 slug 哈希一下取模」→ 会撞色（2026-10-30 用户实测：
+    // 「面试」和「Qt」都拿到了同一个紫），而且主题一增减，别人的颜色就变了。
     const TOPIC_COLORS = ['#3b82f6', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b', '#f43f5e']
 
+    /** 宿主给的主题颜色（slug → 颜色）。面板拉到主题列表后填进来。 */
+    const topicColorMap = new Map()
+
     function topicColor(slug) {
+      const known = topicColorMap.get(String(slug || ''))
+      if (known) return known
+      // 还没拿到主题列表时的兜底（对话里的卡可能属于面板没打开的主题）
       const s = String(slug || '')
       let h = 0
       for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) >>> 0
@@ -970,8 +1077,28 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       return runs.length ? runs : [{ text: '' }]
     }
 
-    /** 【高亮】优先于粗体切分，【】里的内容不再解释别的标记。 */
+    /**
+     * 行内标记：[[卡片链接]] 优先切，然后是 【高亮】、**粗体**。
+     *
+     * 链接排在最前：[[..]] 里是卡片标题，不该被当成别的标记；
+     * 反过来 【..】 里的内容不再解释别的标记（高亮里出现方括号是正常中文）。
+     */
     function parsePlain(text) {
+      const runs = []
+      const linkPattern = /\[\[([^[\]\n]{1,80})\]\]/g
+      let last = 0
+      let match
+      while ((match = linkPattern.exec(text))) {
+        if (match.index > last) runs.push(...parseHighlight(text.slice(last, match.index)))
+        runs.push({ text: match[1], link: true })
+        last = match.index + match[0].length
+      }
+      if (last < text.length) runs.push(...parseHighlight(text.slice(last)))
+      return runs
+    }
+
+    /** 【高亮】优先于粗体切分，【】里的内容不再解释别的标记。 */
+    function parseHighlight(text) {
       const runs = []
       const hlPattern = /【([^】]+)】/g
       let last = 0
@@ -1012,7 +1139,8 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const term = match[1].trim()
       if (!term) return runs
       const rest = text.slice(match[0].length)
-      return [{ text: term, bold: true }, { text: '：' + rest }, ...runs.slice(1)]
+      // term: 术语单独一类 —— 渲染成强调色，一眼扫过去就知道这段在讲什么
+      return [{ text: term, term: true }, { text: '：' + rest }, ...runs.slice(1)]
     }
 
     /** 行首是列表记号：- * + • / 1. 1) / ① */
@@ -1190,7 +1318,25 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       return out.join('\n')
     }
 
-    function renderRuns(runs, key) {
+    /** 链接标题的归一化：和服务端 links.js 的 normalizeLinkTitle 对齐。 */
+    function linkKey(text) {
+      return String(text ?? '')
+        .replace(/[\u3000]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase()
+    }
+
+    /**
+     * 行内渲染。
+     *
+     * ctx.linkMap：标题 → 目标卡片（来自 GET /links）。
+     * ctx.onOpenLink：点链接时的回调。
+     * 目标不在库里（悬空链接）时照样显示，只是不可点 —— 让用户看见「我引用了但那张卡还不存在」。
+     */
+    function renderRuns(runs, key, ctx) {
+      const linkMap = ctx && ctx.linkMap ? ctx.linkMap : null
+      const onOpenLink = ctx && ctx.onOpenLink ? ctx.onOpenLink : null
       return runs.map((run, index) => {
         const props = { key: key + index }
         if (run.code) {
@@ -1205,6 +1351,28 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           props.className = 'kb-strong'
           return h('strong', props, run.text)
         }
+        if (run.term) {
+          props.className = 'kb-term'
+          return h('strong', props, run.text)
+        }
+        if (run.link) {
+          const title = String(run.text || '')
+          const hit = linkMap ? linkMap.get(linkKey(title)) : null
+          props.className = 'kb-linkref' + (hit ? '' : ' unresolved')
+          props.title = hit
+            ? (hit.topicName ? hit.topicName + '：' + title : title)
+            : '还没找到对应的卡片'
+          if (hit && onOpenLink) {
+            props.onClick = event => {
+              if (event && typeof event.preventDefault === 'function') event.preventDefault()
+              if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+              onOpenLink(hit)
+            }
+            props.role = 'button'
+            props.tabIndex = 0
+          }
+          return h('span', props, title)
+        }
         return h('span', props, run.text)
       })
     }
@@ -1212,6 +1380,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
     /** 详情浮层：完整块结构 */
     function BodyBlocks(props) {
       const blocks = parseBody(props.body)
+      const ctx = { linkMap: props.linkMap || null, onOpenLink: props.onOpenLink || null }
       return h(
         'div',
         { className: 'kb-blocks' },
@@ -1226,15 +1395,15 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                   'li',
                   { className: 'kb-li', key: 'b' + index + 'i' + itemIndex },
                   h('span', { className: 'kb-li-marker' }, /[-*+•]/.test(item.marker) ? '•' : item.marker),
-                  h('span', { className: 'kb-li-text' }, renderRuns(item.runs, key + 'i' + itemIndex + '-')),
+                  h('span', { className: 'kb-li-text' }, renderRuns(item.runs, key + 'i' + itemIndex + '-', ctx)),
                 ),
               ),
             )
           }
           if (block.type === 'quote') {
-            return h('blockquote', { className: 'kb-quote', key: 'b' + index }, renderRuns(block.runs, key))
+            return h('blockquote', { className: 'kb-quote', key: 'b' + index }, renderRuns(block.runs, key, ctx))
           }
-          return h('p', { className: 'kb-p', key: 'b' + index }, renderRuns(block.runs, key))
+          return h('p', { className: 'kb-p', key: 'b' + index }, renderRuns(block.runs, key, ctx))
         }),
       )
     }
@@ -1372,10 +1541,21 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
 
     // ---------------------------------------------------------------- 详情浮层
     function EntryModal(props) {
-      const { entry, t, busy, score, coverage, onClose, onArchive, onRestore, onDelete, onChanged } = props
+      const { entry, t, busy, score, coverage, onClose, onArchive, onRestore, onDelete, onChanged, onOpenEntry, groupCards } = props
       const [confirming, setConfirming] = useState(false)
       const [panel, setPanel] = useState('')
       const [rollbackBusy, setRollbackBusy] = useState(false)
+      // 互链（2026-29）：正向（它连着谁）+ 反向（谁连着它）
+      const [linksData, setLinksData] = useState(null)
+      const [linkBusy, setLinkBusy] = useState(false)
+      const [linkInput, setLinkInput] = useState('')
+      const [linkError, setLinkError] = useState('')
+      // 同组那一段默认收起（2026-10-30 用户反馈：一大片太吵）
+      const [groupOpen, setGroupOpen] = useState(false)
+      // 换一张卡就重新收起 —— 别把上一张的展开状态带过来
+      useEffect(() => {
+        setGroupOpen(false)
+      }, [entry.id])
       // 改名（2026-10-26 用户要求：卡片名可以在 ui 随意改）
       const [renaming, setRenaming] = useState(false)
       const [renameText, setRenameText] = useState(entry.title || '')
@@ -1419,6 +1599,64 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           if (typeof console !== 'undefined') console.warn('[learning-kb] 回退失败', err)
         } finally {
           setRollbackBusy(false)
+        }
+      }
+
+      // 互链：打开卡片时拉一次「它连着谁 / 谁连着它」。
+      const loadLinks = useCallback(() => {
+        if (!entry || !entry.id) return
+        apiGet('/links', { id: entry.id, topic: entry.topic || '' })
+          .then(data => {
+            if (data && data.ok) setLinksData(data)
+          })
+          .catch(() => {
+            // 取不到就不显示这一段：不能因为链接接口挂了把卡片详情挡住
+          })
+      }, [entry && entry.id, entry && entry.topic])
+
+      useEffect(() => {
+        loadLinks()
+      }, [loadLinks])
+
+      const linkRows = (linksData && linksData.links) || []
+      const backlinkRows = (linksData && linksData.backlinks) || []
+      // 正文里的 [[某某]] 要知道指谁，靠这张表
+      const linkMap = new Map()
+      for (const item of linkRows) {
+        if (item && item.title) linkMap.set(linkKey(item.title), item)
+      }
+
+      const addLink = async () => {
+        const target = linkInput.trim()
+        if (!target) return
+        setLinkBusy(true)
+        setLinkError('')
+        try {
+          await apiPost('/link', { id: entry.id, topic: entry.topic, target })
+          setLinkInput('')
+          loadLinks()
+        } catch (err) {
+          setLinkError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setLinkBusy(false)
+        }
+      }
+
+      const dropLink = async item => {
+        setLinkBusy(true)
+        setLinkError('')
+        try {
+          await apiPost('/link', {
+            id: entry.id,
+            topic: entry.topic,
+            target: item.id || item.title,
+            remove: true,
+          })
+          loadLinks()
+        } catch (err) {
+          setLinkError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setLinkBusy(false)
         }
       }
 
@@ -1518,7 +1756,139 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
               archived ? h(Badge, { tone: 'idle' }, t('archivedTag')) : null,
             ),
             entry.q ? h('div', { className: 'kb-modal-q' }, 'Q ' + entry.q) : null,
-            h('div', { className: 'kb-modal-text' }, h(BodyBlocks, { body: entry.body })),
+            h('div', { className: 'kb-modal-text' }, h(BodyBlocks, { body: entry.body, linkMap, onOpenLink: onOpenEntry })),
+            // 同组：同一份课件/文件里的其它卡（比链接更宽一层：这是「一个知识簇」）。
+            //
+            // 默认**收起**：用户 2026-10-30 反馈「点开之后同组一大片，噪音太大」，
+            // 而且面板里本来就按出处分好组了 —— 详情里再摊 128 行是重复。
+            // 所以这里只留一行摘要，想看再点开。
+            groupCards
+              ? h(
+                  'div',
+                  { className: 'kb-links' },
+                  h(
+                    'button',
+                    {
+                      className: 'kb-links-toggle',
+                      onClick: () => setGroupOpen(!groupOpen),
+                      'aria-expanded': groupOpen ? 'true' : 'false',
+                      title: groupOpen ? '收起' : '展开同组的卡',
+                    },
+                    h('span', { className: 'kb-links-caret' }, groupOpen ? '▾' : '▸'),
+                    h('span', { className: 'kb-links-toggle-text' }, t('groupSame') + ' · ' + groupCards.cards.length),
+                    h('span', { className: 'kb-links-toggle-ref' }, groupCards.ref),
+                  ),
+                  groupOpen
+                    ? h(
+                        'div',
+                        null,
+                        groupCards.cards.slice(0, 20).map((card, index) =>
+                          h(
+                            'div',
+                            { className: 'kb-link-row', key: card.id + '-' + index },
+                            h(
+                              'span',
+                              {
+                                className: 'kb-link-title',
+                                onClick: onOpenEntry ? () => onOpenEntry(card) : null,
+                              },
+                              card.title,
+                            ),
+                            card.topicName ? h('span', { className: 'kb-link-tag' }, card.topicName) : null,
+                            card.locator ? h('span', { className: 'kb-link-tag' }, card.locator) : null,
+                          ),
+                        ),
+                      )
+                    : null,
+                  groupOpen && groupCards.cards.length > 20
+                    ? h('div', { className: 'kb-links-empty' }, '… 还有 ' + (groupCards.cards.length - 20) + ' 张（在面板里按出处看更方便）')
+                    : null,
+                )
+              : null,
+            h(
+              'div',
+              { className: 'kb-links' },
+              h('div', { className: 'kb-links-head' }, t('linksTitle') + ' · ' + linkRows.length),
+              linkRows.length
+                ? linkRows.map((item, index) =>
+                    h(
+                      'div',
+                      { className: 'kb-link-row', key: (item.id || item.title) + '-' + index },
+                      h(
+                        'span',
+                        {
+                          className: 'kb-link-title' + (item.resolved ? '' : ' unresolved'),
+                          onClick: item.resolved && onOpenEntry ? () => onOpenEntry(item) : null,
+                          title: item.resolved ? '' : t('linkUnresolved'),
+                        },
+                        item.title,
+                      ),
+                      item.topicName ? h('span', { className: 'kb-link-tag' }, item.topicName) : null,
+                      item.from === 'body'
+                        ? h('span', { className: 'kb-link-tag' }, t('linkFromBody'))
+                        : null,
+                      item.from === 'auto'
+                        ? h('span', { className: 'kb-link-tag' }, t('linkAuto'))
+                        : null,
+                      // 正文里的引用不给删除按钮（要改它得改正文），
+                      // 手动挂的和自动关联的都能单独拆掉
+                      item.from === 'body'
+                        ? null
+                        : h(
+                            'button',
+                            {
+                              className: 'kb-mini danger',
+                              disabled: linkBusy,
+                              onClick: () => dropLink(item),
+                              title: t('linkRemove'),
+                            },
+                            '×',
+                          ),
+                    ),
+                  )
+                : h('div', { className: 'kb-links-empty' }, t('linkEmpty')),
+              h(
+                'div',
+                { className: 'kb-links-add' },
+                h('input', {
+                  className: 'kb-input',
+                  value: linkInput,
+                  placeholder: t('linkAddPlaceholder'),
+                  disabled: linkBusy,
+                  onChange: event => setLinkInput(event && event.target ? event.target.value : ''),
+                  onKeyDown: event => {
+                    if (event && event.key === 'Enter') {
+                      if (typeof event.preventDefault === 'function') event.preventDefault()
+                      addLink()
+                    }
+                  },
+                }),
+                h(
+                  'button',
+                  { className: 'kb-mini', disabled: linkBusy || !linkInput.trim(), onClick: addLink },
+                  t('linkAdd'),
+                ),
+              ),
+              linkError ? h('div', { className: 'kb-links-error' }, linkError) : null,
+              h('div', { className: 'kb-links-head' }, t('backlinksTitle') + ' · ' + backlinkRows.length),
+              backlinkRows.length
+                ? backlinkRows.map((item, index) =>
+                    h(
+                      'div',
+                      { className: 'kb-link-row', key: (item.id || item.title) + '-' + index },
+                      h(
+                        'span',
+                        {
+                          className: 'kb-link-title',
+                          onClick: onOpenEntry ? () => onOpenEntry(item) : null,
+                        },
+                        item.title,
+                      ),
+                      item.topicName ? h('span', { className: 'kb-link-tag' }, item.topicName) : null,
+                    ),
+                  )
+                : h('div', { className: 'kb-links-empty' }, t('backlinkEmpty')),
+            ),
             panel === 'verify'
               ? h(VerifyPanel, {
                   card: entry,
@@ -1848,6 +2218,12 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const [query, setQuery] = useState('')
       const [debounced, setDebounced] = useState('')
       const [entries, setEntries] = useState([])
+      // 出处分组（2026-10-29）：知识库是从一份份课件整理来的，按出处翻更贴近思路。
+      // groupBy='source' 时列表按组展示，'flat' 时保持原来的平铺。
+      const [groups, setGroups] = useState([])
+      const [groupBy, setGroupBy] = useState('source')
+      const [collapsedGroups, setCollapsedGroups] = useState({})
+      const [groupBusy, setGroupBusy] = useState('')
       const [hits, setHits] = useState([])
       const [poolSize, setPoolSize] = useState(0)
       const [loading, setLoading] = useState(true)
@@ -1938,6 +2314,29 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           })
       }, [])
 
+      /**
+       * 打开另一张卡（从互链点进来的）。
+       *
+       * 走 /entry 取全文：链接给的是 id + topic，没有摘要，
+       * 直接 setDetail 的话弹窗里正文是空的。
+       */
+      const openEntry = useCallback((item) => {
+        if (!item || !item.id) return
+        setDetailLoading(true)
+        apiGet('/entry', { id: item.id, topic: item.topic || '' })
+          .then((data) => {
+            if (!alive.current) return
+            const full = data && data.entry ? data.entry : null
+            if (full) setDetail(full)
+          })
+          .catch(() => {
+            // 目标取不到就留在当前卡片：不要把用户直接关回列表
+          })
+          .finally(() => {
+            if (alive.current) setDetailLoading(false)
+          })
+      }, [])
+
       useEffect(() => {
         alive.current = true
         return () => {
@@ -1956,6 +2355,11 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         const controller = new AbortController()
         apiGet('/overview', {}, controller.signal)
           .then((data) => {
+            // 主题颜色：宿主在建主题时定好的，不同主题不撞色
+            topicColorMap.clear()
+            for (const item of (data && data.topics) || []) {
+              if (item && item.color) topicColorMap.set(String(item.slug), item.color)
+            }
             if (alive.current) setOverview(data)
           })
           .catch((err) => {
@@ -2006,6 +2410,33 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         return () => controller.abort()
       }, [topic, status, debounced, tick])
 
+      // 出处分组：一次拉全库的组（面板分组浏览 + 详情里的「同组 N 张」都用它）。
+      // 组是跨主题的（一份课件的卡可能分布在两个主题里），所以按 all 拉。
+      useEffect(() => {
+        const controller = new AbortController()
+        apiGet('/groups', { topic: 'all' }, controller.signal)
+          .then((data) => {
+            if (alive.current) setGroups((data && data.groups) || [])
+          })
+          .catch((err) => {
+            if (err && err.name === 'AbortError') return
+            // 拉不到分组不是致命错误：退回平铺显示，别的功能照常用
+            if (alive.current) setGroups([])
+          })
+        return () => controller.abort()
+      }, [tick])
+
+      // 详情浮层的「同组 N 张」：当前这张卡所在组的其它卡
+      const detailGroup = useMemo(() => {
+        if (!detail || !groups.length) return null
+        for (const group of groups) {
+          if (!group.cards.some(card => card.id === detail.id)) continue
+          const others = group.cards.filter(card => card.id !== detail.id)
+          return others.length ? { ref: group.ref, cards: others } : null
+        }
+        return null
+      }, [detail, groups])
+
       // 宿主兼容报告：只拉一次（跟 tick 走，刷新时重探）。
       // 拉不到不是致命错误 —— 老版本宿主没有 /compat 这个接口，
       // 这时 setCompat(null)，界面就不显示那一行，行为与以前一致。
@@ -2027,6 +2458,23 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         noticeTimer.current = setTimeout(() => setNotice(''), 5000)
       }
 
+      // 扫描关联：把知识库里「该连的」连上。只加不删，第二次扫是幂等的。
+      const [relating, setRelating] = useState(false)
+      const scanRelations = async () => {
+        setRelating(true)
+        setError('')
+        try {
+          const data = await apiPost('/relate', {})
+          const added = data && data.added ? data.added : 0
+          flash(added ? t('relateDone') + ' ' + added + ' ' + t('unitLinks') : t('relateNone'))
+          refresh()
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setRelating(false)
+        }
+      }
+
       const mutate = async (path, payload, message) => {
         setBusyId(payload.id)
         setError('')
@@ -2045,8 +2493,79 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
       const totalActive = (overview && overview.activeTotal) || 0
       const totalAll = (overview && overview.total) || 0
       const searching = debounced.length > 0
+      // 一张卡的渲染（平铺和分组两种视图共用）
+      const renderCard = entry =>
+        h(EntryCard, {
+          key: (entry.topic || '') + ':' + entry.id,
+          entry,
+          t,
+          score: searching ? entry.score : undefined,
+          coverage: searching ? entry.coverage : undefined,
+          busy: busyId === entry.id,
+          selectable: multi,
+          selected: picked.includes(entry.id),
+          onToggle: togglePick,
+          onOpen: openDetail,
+          onArchive: (item) => mutate('/archive', { topic: item.topic, id: item.id }, t('archive')),
+          onRestore: (item) => mutate('/restore', { topic: item.topic, id: item.id }, t('restore')),
+          onDelete: (item) => mutate('/delete', { topic: item.topic, id: item.id }, t('remove')),
+          onVerify: (item) =>
+            mutate('/card/verify', { id: item.id, topic: item.topic, state: 'verified', by: 'user' }, t('verifyDone')),
+        })
+
       const list = searching ? hits : entries
       const unverifiedCount = list.filter(item => !item.verified).length
+
+      // 出处分组：面板按「同一份课件」分组显示，组内按页码（= 课件的顺序）
+      const groupRows = useMemo(() => {
+        if (groupBy !== 'source' || searching || !groups.length) return null
+        const byId = new Map(list.map(entry => [entry.id, entry]))
+        const rows = []
+        const used = new Set()
+        for (const group of groups) {
+          const cards = group.cards.map(card => byId.get(card.id)).filter(Boolean)
+          if (!cards.length) continue
+          for (const card of cards) used.add(card.id)
+          rows.push({ ...group, cards })
+        }
+        if (!rows.length) return null
+        const rest = list.filter(entry => !used.has(entry.id))
+        return { rows, rest }
+      }, [groups, list, groupBy, searching])
+
+      const toggleGroup = key =>
+        setCollapsedGroups(current => ({ ...current, [key]: !current[key] }))
+
+      /**
+       * 这一组（**显示出来的这些卡**）是不是已经连成一条链了。
+       *
+       * 为什么不用组里的总链接数：组是跨主题的（比如「模型知识」这一组里
+       * 有 C# 的卡也有面试的卡），用总数判断会出现「这一组看着没连、其实连了」。
+       * 宿主按卡给了 chained（连到组里下一张的那些卡），这里照着显示的卡数一下。
+       */
+      const groupChained = group => {
+        const chained = Array.isArray(group.chained) ? group.chained : []
+        if (!chained.length) return false
+        // 最后一张没有「下一张」，不用看它连没连
+        const shown = group.cards.slice(0, -1)
+        if (!shown.length) return false
+        return shown.every(card => chained.includes(card.id))
+      }
+
+      // 连成一组：把这一组按页码连成链（只加不删，重复点不会连出第二遍）
+      const linkGroup = async group => {
+        setGroupBusy(group.key)
+        setError('')
+        try {
+          const data = await apiPost('/relate/group', { key: group.key, topic: topic || '' })
+          flash(t('groupLinked') + ' · ' + (data && data.linked ? data.linked : 0) + ' ' + t('unitLinks'))
+          refresh()
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setGroupBusy('')
+        }
+      }
 
       const togglePick = (id) => {
         setPicked(current => (current.includes(id) ? current.filter(item => item !== id) : current.concat([id])))
@@ -2108,6 +2627,16 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 '未核实 ' + unverifiedCount + ' 条',
               )
             : null,
+          h(
+            'button',
+            {
+              className: 'kb-btn',
+              onClick: scanRelations,
+              disabled: relating || loading,
+              title: '扫一遍全库，把同一份课件/文件的卡按页码顺序连起来（只加不删，不会拆掉你已有的链接）',
+            },
+            relating ? t('relateDoing') : t('relateScan'),
+          ),
           h('button', { className: 'kb-btn', onClick: refresh, disabled: loading }, t('refresh')),
           h('button', { className: 'kb-btn primary', onClick: () => setAdding(!adding) }, t('add')),
         ),
@@ -2137,6 +2666,22 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             h('option', { value: 'active' }, t('statusActive')),
             h('option', { value: 'archived' }, t('statusArchived')),
             h('option', { value: 'all' }, t('statusAll')),
+          ),
+          // 分组方式：按出处（同一份课件一组）还是平铺
+          h(
+            'div',
+            { className: 'kb-srcgroup-bar' },
+            h('button', {
+              className: groupBy === 'source' ? 'on' : '',
+              onClick: () => setGroupBy('source'),
+              disabled: searching,
+              title: '按来源文件分组（同一份课件的卡放在一起，组内按页码排）',
+            }, t('groupBySource')),
+            h('button', {
+              className: groupBy === 'flat' ? 'on' : '',
+              onClick: () => setGroupBy('flat'),
+              title: '不分组，按更新时间平铺',
+            }, t('groupFlat')),
           ),
         ),
         notice ? h('div', { className: 'kb-ok' }, notice) : null,
@@ -2258,29 +2803,67 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                   searching ? h('button', { className: 'kb-btn', onClick: () => setQuery('') }, '清空搜索') : null,
                 )
               : null,
-            h(
-              'div',
-              { className: 'kb-grid' },
-              list.map((entry) =>
-              h(EntryCard, {
-                key: (entry.topic || '') + ':' + entry.id,
-                entry,
-                t,
-                score: searching ? entry.score : undefined,
-                coverage: searching ? entry.coverage : undefined,
-                busy: busyId === entry.id,
-                selectable: multi,
-                selected: picked.includes(entry.id),
-                onToggle: togglePick,
-                onOpen: openDetail,
-                onArchive: (item) => mutate('/archive', { topic: item.topic, id: item.id }, t('archive')),
-                onRestore: (item) => mutate('/restore', { topic: item.topic, id: item.id }, t('restore')),
-                onDelete: (item) => mutate('/delete', { topic: item.topic, id: item.id }, t('remove')),
-                onVerify: (item) =>
-                  mutate('/card/verify', { id: item.id, topic: item.topic, state: 'verified', by: 'user' }, t('verifyDone')),
-              }),
-              ),
-            ),
+            groupRows
+              ? h(
+                  'div',
+                  null,
+                  groupRows.rows.map(group =>
+                    h(
+                      'div',
+                      { className: 'kb-srcgroup', key: group.key },
+                      h(
+                        'div',
+                        { className: 'kb-srcgroup-head' },
+                        h(
+                          'button',
+                          {
+                            className: 'kb-srcgroup-toggle',
+                            onClick: () => toggleGroup(group.key),
+                            title: collapsedGroups[group.key] ? '展开' : '收起',
+                          },
+                          h('span', { className: 'kb-srcgroup-caret' }, collapsedGroups[group.key] ? '▸' : '▾'),
+                          h('span', { className: 'kb-srcgroup-title' }, group.ref),
+                        ),
+                        h('span', { className: 'kb-srcgroup-count' }, group.cards.length + ' 张'),
+                        group.cards.length < 2
+                          ? null
+                          : groupChained(group)
+                            ? h('span', { className: 'kb-srcgroup-count' }, t('groupLinked'))
+                            : h(
+                                'button',
+                                {
+                                  className: 'kb-srcgroup-act',
+                                  disabled: groupBusy === group.key,
+                                  onClick: () => linkGroup(group),
+                                  title: '把这一组按课件顺序连成一条链',
+                                },
+                                groupBusy === group.key ? t('groupLinking') : t('groupLink'),
+                              ),
+                      ),
+                      collapsedGroups[group.key]
+                        ? null
+                        : h(
+                            'div',
+                            { className: 'kb-srcgroup-body' },
+                            group.cards.map(entry => renderCard(entry)),
+                          ),
+                    ),
+                  ),
+                  groupRows.rest.length
+                    ? h(
+                        'div',
+                        { className: 'kb-srcgroup' },
+                        h(
+                          'div',
+                          { className: 'kb-srcgroup-head' },
+                          h('span', { className: 'kb-srcgroup-title' }, '未标出处'),
+                          h('span', { className: 'kb-srcgroup-count' }, groupRows.rest.length + ' 张'),
+                        ),
+                        h('div', { className: 'kb-srcgroup-body' }, groupRows.rest.map(entry => renderCard(entry))),
+                      )
+                    : null,
+                )
+              : h('div', { className: 'kb-grid' }, list.map(entry => renderCard(entry))),
           ),
         ),
         multi
@@ -2337,10 +2920,12 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           ? h(EntryModal, {
               entry: detail,
               t,
+              groupCards: detailGroup,
               busy: busyId === detail.id,
               score: searching ? detail.score : undefined,
               coverage: searching ? detail.coverage : undefined,
               onClose: () => setDetail(null),
+              onOpenEntry: openEntry,
               onArchive: (item) => {
                 setDetail(null)
                 mutate('/archive', { topic: item.topic, id: item.id }, t('archive'))
@@ -3654,7 +4239,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
           'div',
           {
             className: 'kb-chat-card kb-mini-card kb-role-' + role,
-            style: { '--kb-tc': topicColor(card.topic), '--kb-role-c': roleMeta.color },
+            style: { '--kb-tc': card.topicColor || topicColor(card.topic), '--kb-role-c': roleMeta.color },
             onClick: () => setOpen(true),
             role: 'button',
             tabIndex: 0,
@@ -3697,7 +4282,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         'article',
         {
           className: 'kb-chat-card kb-role-' + role,
-          style: { '--kb-tc': topicColor(card.topic), '--kb-role-c': roleMeta.color },
+          style: { '--kb-tc': card.topicColor || topicColor(card.topic), '--kb-role-c': roleMeta.color },
         },
         h(
           'div',
@@ -4083,6 +4668,44 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
        * 这里用 /save 返回的 plan 把 id 补回来。
        */
       const [writtenIds, setWrittenIds] = useState({})
+      // 建议关联：每张待写入的卡下面「建议连上谁」，默认勾高置信度的，用户可以取消。
+      // 键用标题（预览态的卡还没有 id）。
+      const [suggestPicks, setSuggestPicks] = useState({})
+      // 建议索引：标题 → {candidates, batchId}
+      const suggestMap = useMemo(() => {
+        const map = new Map()
+        for (const batch of saves || []) {
+          for (const item of batch.suggestions || []) {
+            const title = String(item.title || '')
+            if (!title) continue
+            map.set(title, { candidates: item.candidates || [], batchId: batch.batchId })
+          }
+        }
+        return map
+      }, [saves])
+      /** 这张卡勾了哪些关联（用户没动过 = 高置信度的默认勾上）。 */
+      const pickedFor = title => {
+        const entry = suggestMap.get(title)
+        if (!entry) return []
+        if (suggestPicks[title]) return suggestPicks[title]
+        return entry.candidates.filter(item => item.confidence === 'high').map(item => item.title)
+      }
+      const toggleSuggest = (title, candidate) => {
+        const current = pickedFor(title)
+        const next = current.includes(candidate)
+          ? current.filter(item => item !== candidate)
+          : current.concat(candidate)
+        setSuggestPicks(state => ({ ...state, [title]: next }))
+      }
+      /** 写入时要带上的关联（按卡片标题）。 */
+      const chosenLinks = () => {
+        const out = []
+        for (const [title] of suggestMap) {
+          const picked = pickedFor(title)
+          if (picked.length) out.push({ title, links: picked })
+        }
+        return out
+      }
       if (cards.length === 0 && related.length === 0 && !saves.length && !proposal) return null
 
       const headBits = []
@@ -4124,7 +4747,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         for (const target of targets) {
           setBatchState(target, { busy: true, done: false, error: '' })
           try {
-            const data = await apiPost('/save', { batchId: target })
+            const data = await apiPost('/save', { batchId: target, links: chosenLinks() })
             absorbWritten(data)
             setBatchState(target, { busy: false, done: true, error: '', left: 0 })
           } catch (error) {
@@ -4143,7 +4766,7 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
         const key = String(card.title || '')
         setWriteOneState(state => ({ ...state, [key]: 'busy' }))
         try {
-          const data = await apiPost('/save', { batchId, titles: [key] })
+          const data = await apiPost('/save', { batchId, titles: [key], links: chosenLinks() })
           setWriteOneState(state => ({ ...state, [key]: 'done' }))
           absorbWritten(data)
           if (data && typeof data.remaining === 'number') setBatchState(batchId, { left: data.remaining })
@@ -4253,7 +4876,10 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
             visible.map((card, index) => {
               const real = withWrittenId(card)
               const batchId = cardBatch[String(card.title || '')] || ''
-              return h(ChatCard, {
+              const cardTitle = String(card.title || '')
+              const suggestion = suggestMap.get(cardTitle)
+              const picked = suggestion ? pickedFor(cardTitle) : []
+              const chatCard = h(ChatCard, {
                 key: (real.id || group.role) + '-' + index,
                 card: real,
                 // 会话末尾的卡片默认收成一行小预览，点一下才展开（2026-10-23 用户要求）
@@ -4262,6 +4888,31 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                 onWriteOne: batchId && !real.id ? item => writeOne(item, batchId) : null,
                 writeState: writeOneState[String(card.title || '')] || '',
               })
+              if (!suggestion || !suggestion.candidates.length) return chatCard
+              // 「建议关联」：默认勾高置信度的，用户可以取消；写入时随卡片一起落库
+              return h(
+                'div',
+                { key: 'sg-' + (real.id || group.role) + '-' + index },
+                chatCard,
+                h(
+                  'div',
+                  { className: 'kb-suggest' },
+                  h('span', { className: 'kb-suggest-label' }, translate('suggestTitle') + '：'),
+                  suggestion.candidates.map(candidate =>
+                    h(
+                      'label',
+                      { className: 'kb-suggest-item', key: candidate.title },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: picked.includes(candidate.title),
+                        onChange: () => toggleSuggest(cardTitle, candidate.title),
+                      }),
+                      h('span', null, candidate.title),
+                      candidate.why ? h('span', { className: 'kb-suggest-why' }, candidate.why) : null,
+                    ),
+                  ),
+                ),
+              )
             }),
             // 翻页按钮放在**本组卡片下面**：一次 +10，不一口气全开。
             // 点它会在上方插入卡片 → 视口会被带着跳到底部，所以点之前记一下滚动位置。
@@ -4409,6 +5060,17 @@ mark.kb-hl-run{background:transparent;color:inherit;padding:0 1px;text-decoratio
                     h('b', null, ' ' + left + ' '),
                     batch.topicName ? h('span', { className: 'kb-save-bar-topic' }, '→ ' + batch.topicName) : null,
                   ),
+                  // 这批里同一份出处的卡：写入时会自动连成一组
+                  // （课件按页码顺序、模型知识按写入顺序 —— 所以文案说「按顺序」，
+                  //  不说「按课件顺序」：模型知识那组没有课件）
+                  (batch.batchSources || []).length
+                    ? h(
+                        'span',
+                        { className: 'kb-save-bar-topic' },
+                        '写入时按顺序连成一组：' +
+                          batch.batchSources.map(item => `《${item.ref}》${item.count} 张`).join('、'),
+                      )
+                    : null,
                   state.done
                     ? h('span', { className: 'kb-save-ok' }, '✓ ' + translate('saveDone') + ' ' + (batch.count || 0) + ' ' + translate('unitCards'))
                     : h(

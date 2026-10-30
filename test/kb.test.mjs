@@ -674,6 +674,46 @@ console.log('主题改名')
     fs.rmSync(cn, { recursive: true, force: true })
   })
 
+  // 2026-10-30 用户实测「不同主题的颜色不同，怎么颜色撞了」：
+  // 以前颜色是「拿 slug 哈希一下取模 6」→ 真库上「面试」和「Qt」撞成同一个紫。
+  // 现在颜色建主题时就定好、存在主题元数据里：不同主题不撞、也不会因为别的主题增删而变。
+  check('主题颜色：不同主题不撞色', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-color-'))
+    const c = createStore(cn)
+    const slugs = ['面试', 'Qt', 'mysql', 'C#', 'redis'].map(name => c.createTopic(name))
+    const colors = slugs.map(slug => c.listTopics().find(item => item.slug === slug).color)
+    for (const color of colors) assert.ok(color, '每个主题都要有颜色')
+    assert.equal(new Set(colors).size, colors.length, '不同主题不能撞色：' + colors.join(' '))
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+  check('主题颜色：稳定（再加一个主题，别人的颜色不变）', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-color2-'))
+    const c = createStore(cn)
+    const a = c.createTopic('面试')
+    const before = c.listTopics().find(item => item.slug === a).color
+    c.createTopic('Qt')
+    const after = c.listTopics().find(item => item.slug === a).color
+    assert.equal(after, before, '加一个主题不该把别人的颜色改了')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+  check('主题颜色：老主题（没有颜色的）会被补上，且互不撞', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-color3-'))
+    const c = createStore(cn)
+    const slugs = ['老主题甲', '老主题乙'].map(name => c.createTopic(name))
+    // 模拟「颜色是后来才加的」：把元数据里的颜色抹掉
+    for (const slug of slugs) {
+      const file = path.join(cn, 'topics', slug, 'topic.json')
+      const meta = JSON.parse(fs.readFileSync(file, 'utf8'))
+      delete meta.color
+      fs.writeFileSync(file, JSON.stringify(meta, null, 2))
+    }
+    const topics = c.listTopics()
+    const colors = topics.map(item => item.color)
+    for (const color of colors) assert.ok(color, '老主题也要补上颜色')
+    assert.equal(new Set(colors).size, colors.length, '补色也不能撞')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
   check('现场隐患：显示名≠slug 的主题，界面加卡后不能被改名', () => {
     // 现场真有一个这样的主题：slug 是 c，显示名是「C#」。
     // 界面加卡片传的是 item.slug —— 老代码会把它当成「改名成 c」，

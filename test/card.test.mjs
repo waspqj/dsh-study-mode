@@ -605,6 +605,17 @@ await check('GET /overview 要带上领域和旧名字（编辑弹窗要显示�
   assert.ok(topic.aliases.includes('概览主题'))
 })
 
+await check('GET /overview 要带上主题颜色（面板圆点/卡片色条全靠它）', async () => {
+  // 2026-10-30 用户实测「不同主题的颜色不同，怎么颜色撞了」。
+  // 这个字段漏过一次：store 里有了，/overview 逐字段拼的时候漏了 →
+  // 界面拿不到颜色就退回哈希取模 → 还是撞色。
+  const res = await get('/overview')
+  assert.ok(res.json.topics.length > 0)
+  const colors = res.json.topics.map(item => item.color)
+  for (const color of colors) assert.ok(color, '每个主题都要带颜色：' + JSON.stringify(res.json.topics))
+  assert.equal(new Set(colors).size, colors.length, '不同主题不能撞色：' + colors.join(' '))
+})
+
 await check('POST /topic/update 缺参数要报错', async () => {
   const res = await post('/topic/update', {})
   assert.equal(res.statusCode, 400)
