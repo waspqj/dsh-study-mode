@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    # The client snapshot was captured on the development machine (Windows, zh-CN,
+    # UTC+8); the rendered DOM differs on Linux, so CI mirrors that environment.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      TZ: Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: check (plugin loads, exports, tool wiring)
+        run: npm run check
+      - name: test
+        run: npm test
