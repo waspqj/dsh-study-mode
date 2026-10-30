@@ -80,7 +80,7 @@ DSH 的「插件」页 →「添加插件」→「安装第三方插件」：
 | --- | --- | --- |
 | **npm 包名** | `dsh-study-mode` | 国内可在「安装源」选 npmmirror 镜像 |
 | **Gitee 仓库** | `git+https://gitee.com/waspqj/dsh-study-mode.git` | **必须带 `git+` 前缀**（裸地址会被当成 tarball，拉回 HTML 页面导致安装失败） |
-| **GitHub 仓库** | 暂未开设 | 宿主认得 github.com，直接可用（开了以后把地址填这里） |
+| **GitHub 仓库** | `git+https://github.com/waspqj/dsh-study-mode.git` | 宿主认得 github.com，直接可用；同一个发布源，代码与 Gitee 一致 |
 | **tarball** | `https://…/dsh-study-mode-0.3.24.tgz` | 或本地绝对路径 |
 | **本地目录** | `C:\path\to\dsh-study-mode` | 开发者用 |
 
@@ -178,8 +178,10 @@ DSH 的「插件」页 →「添加插件」→「安装第三方插件」：
 - **只写自己的目录**（`~/.dsh/learn`），不依赖、也不冲突任何其它记忆 / 知识库插件。
 - **不改宿主行为**：agent 预设只在你主动选「学习模式」的会话里生效；
   侧边栏那个面板只是查看器，不会替你做检索、入库、联网这些事。
-- 名字撞车说明白：**唯一发布源是 npm 上的 `dsh-study-mode` 和 Gitee 上的
-  `waspqj/dsh-study-mode`**。其它同名 / 分叉的仓库不是发布源，别从那儿装。
+- 名字撞车说明白：**唯一发布源是 npm 上的 `dsh-study-mode`**，源码仓库是
+  [GitHub](https://github.com/waspqj/dsh-study-mode) 和
+  [Gitee](https://gitee.com/waspqj/dsh-study-mode)（同一份代码、同一批 tag）。
+  其它同名 / 分叉的仓库不是发布源，别从那儿装。
 
 ## 自定义
 
