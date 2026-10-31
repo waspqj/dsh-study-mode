@@ -4,6 +4,8 @@
 
 [![npm version](https://img.shields.io/npm/v/dsh-study-mode)](https://www.npmjs.com/package/dsh-study-mode)
 [![npm downloads](https://img.shields.io/npm/dm/dsh-study-mode)](https://www.npmjs.com/package/dsh-study-mode)
+[![GitHub stars](https://img.shields.io/github/stars/waspqj/dsh-study-mode?style=social)](https://github.com/waspqj/dsh-study-mode)
+[![CI](https://github.com/waspqj/dsh-study-mode/actions/workflows/ci.yml/badge.svg)](https://github.com/waspqj/dsh-study-mode/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/npm/l/dsh-study-mode)](https://www.npmjs.com/package/dsh-study-mode)
 
 > DeepSeek Harness (DSH) 插件 · agent 预设 + 侧边栏知识库面板
@@ -79,8 +81,8 @@ DSH 的「插件」页 →「添加插件」→「安装第三方插件」：
 | 方式 | 填什么 | 注意 |
 | --- | --- | --- |
 | **npm 包名** | `dsh-study-mode` | 国内可在「安装源」选 npmmirror 镜像 |
-| **Gitee 仓库** | `git+https://gitee.com/waspqj/dsh-study-mode.git` | **必须带 `git+` 前缀**（裸地址会被当成 tarball，拉回 HTML 页面导致安装失败） |
-| **GitHub 仓库** | `git+https://github.com/waspqj/dsh-study-mode.git` | 宿主认得 github.com，直接可用；同一个发布源，代码与 Gitee 一致 |
+| **GitHub 仓库** | `git+https://github.com/waspqj/dsh-study-mode.git` | 宿主认得 github.com，直接可用；**主发布源**，代码与 Gitee 一致 |
+| **Gitee 仓库** | `git+https://gitee.com/waspqj/dsh-study-mode.git` | 国内访问快的一模一样的镜像；**必须带 `git+` 前缀**（裸地址会被当成 tarball，拉回 HTML 页面导致安装失败） |
 | **tarball** | `https://…/dsh-study-mode-0.3.24.tgz` | 或本地绝对路径 |
 | **本地目录** | `C:\path\to\dsh-study-mode` | 开发者用 |
 
