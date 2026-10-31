@@ -1,3 +1,5 @@
+![dsh-study-mode](https://raw.githubusercontent.com/waspqj/dsh-study-mode/main/assets/social-preview.jpg)
+
 # dsh-study-mode
 
 **学习模式（study-mode）**：把知识学进**主题知识库**，问的时候直接从库里查 —— **查到了标出处，查不到标「未验证」**。
