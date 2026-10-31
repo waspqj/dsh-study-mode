@@ -25,6 +25,10 @@
     - id: preset-study
       name: '@deepseek-ai/dsh-agent-preset'
       config:
+        # 2026-10-31：这里原来写的是 study，发布脚本会把它改成 study-mode。
+        # 结果开发副本和发布版的**预设 id 不一样** —— 而会话里存的就是这个 id，
+        # 换一次 bundle 旧会话就恢复不了（"Unknown agent preset: study"）。
+        # 两边必须一样，所以源文件直接写最终值。
         id: study-mode
         name: 学习模式
         description: 学知识存主题库；回答问题按 主题库 → 全局主题 → 模型知识 → 网络 四级检索。

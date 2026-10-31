@@ -185,6 +185,14 @@ for (const row of ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-web', '@de
   if (!patch.includes(row)) fail(`预设缺少插件行：${row}`)
 }
 
+// 4b. 预设 id 必须跟发布版一致
+// 会话里存的就是这个 id（record.rows.agentPreset.val）。开发副本跟发布版不一致时，
+// 换一次 bundle 旧会话就恢复不了（"Unknown agent preset: study"）—— 2026-10-31 踩过。
+const presetIdMatch = patch.match(/^\s{8}id:\s*(\S+)\s*$/m)
+if (!presetIdMatch) fail("预设里找不到 agent 预设的 id（缩进 8 空格的那一行）")
+else if (presetIdMatch[1] !== 'study-mode')
+  fail(`预设 id 必须是 study-mode（开发副本与发布版必须一致，否则换 bundle 旧会话恢复不了），现在是 ${presetIdMatch[1]}`)
+
 // 5. 工具白名单：学习模式只留「读被指名的文件」这一类
 const pluginSource = fs.readFileSync(path.join(root, 'plugin', 'tools.js'), 'utf8')
 if (!pluginSource.includes('tools.restrict')) {
