@@ -9,6 +9,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/waspqj/dsh-study-mode?style=social)](https://github.com/waspqj/dsh-study-mode)
 [![CI](https://github.com/waspqj/dsh-study-mode/actions/workflows/ci.yml/badge.svg)](https://github.com/waspqj/dsh-study-mode/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/npm/l/dsh-study-mode)](https://www.npmjs.com/package/dsh-study-mode)
+[![Topic](https://img.shields.io/badge/topic-dsh--plugin-0e7490.svg?style=flat-square)](https://github.com/topics/dsh-plugin)
 
 > DeepSeek Harness (DSH) 插件 · agent 预设 + 侧边栏知识库面板
 > `dsh-plugin` · `dsh-bundle` · `agent-preset` · `study-mode` · `knowledge-base` · `learning`
