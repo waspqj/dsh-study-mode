@@ -14,6 +14,8 @@
 > DeepSeek Harness (DSH) 插件 · agent 预设 + 侧边栏知识库面板
 > `dsh-plugin` · `dsh-bundle` · `agent-preset` · `study-mode` · `knowledge-base` · `learning`
 
+📖 中文介绍（掘金）：[DSH 插件「学习模式」：生成本地自己的知识库 联网验证避免AI幻觉](https://juejin.cn/post/7702914241568931875)
+
 一个包给你两样东西：
 
 | | |
