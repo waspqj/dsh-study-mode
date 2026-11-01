@@ -106,14 +106,20 @@
 
 ## 安装
 
-DSH 的「插件」页 →「添加插件」→「安装第三方插件」：
+命令行一条装（复制就能用）：
+
+```bash
+dsh plugin --profile web add dsh-study-mode
+```
+
+或者走图形界面：DSH 的「插件」页 →「添加插件」→「安装第三方插件」：
 
 | 方式 | 填什么 | 注意 |
 | --- | --- | --- |
 | **npm 包名** | `dsh-study-mode` | 国内可在「安装源」选 npmmirror 镜像 |
 | **GitHub 仓库** | `git+https://github.com/waspqj/dsh-study-mode.git` | 宿主认得 github.com，直接可用；**主发布源**，代码与 Gitee 一致 |
 | **Gitee 仓库** | `git+https://gitee.com/waspqj/dsh-study-mode.git` | 国内访问快的一模一样的镜像；**必须带 `git+` 前缀**（裸地址会被当成 tarball，拉回 HTML 页面导致安装失败） |
-| **tarball** | `https://…/dsh-study-mode-0.3.24.tgz` | 或本地绝对路径 |
+| **tarball** | `https://…/dsh-study-mode-0.3.25.tgz` | 或本地绝对路径 |
 | **本地目录** | `C:\path\to\dsh-study-mode` | 开发者用 |
 
 装完**重启 DSH**（bundle 是启动时装配的）。「安装源」可选：默认 / npm 官方源 / 中国大陆镜像 / 自定义地址。
