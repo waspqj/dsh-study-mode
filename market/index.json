@@ -1,0 +1,98 @@
+{
+  "format": 1,
+  "title": "dsh-study-mode",
+  "description": "DeepSeek Harness plugin index for dsh-study-mode (learning mode): an agent preset that searches a local topic knowledge base before answering, marks answers that came from a card, and marks anything not found as unverified.",
+  "metadata": {
+    "categories": {
+      "knowledge": {
+        "title": "Knowledge & Memory"
+      }
+    },
+    "labels": {
+      "knowledge": {
+        "title": "Knowledge"
+      },
+      "memory": {
+        "title": "Memory"
+      }
+    },
+    "sortKeys": {
+      "stars": {
+        "title": "GitHub stars",
+        "order": "desc"
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "dsh-study-mode",
+      "title": "学习模式 · dsh-study-mode",
+      "description": "Learning-mode agent preset plus a sidebar knowledge-base panel: answers retrieve your own stored cards, cite the card they came from, and mark anything not found as unverified.",
+      "author": "waspqj",
+      "homepage": "https://github.com/waspqj/dsh-study-mode#readme",
+      "repository": {
+        "url": "https://github.com/waspqj/dsh-study-mode"
+      },
+      "metadata": {
+        "category": "knowledge",
+        "labels": [
+          "knowledge",
+          "memory"
+        ],
+        "keywords": [
+          "deepseek-harness",
+          "dsh",
+          "dsh-plugin",
+          "dsh-bundle",
+          "agent-preset",
+          "study-mode",
+          "learning",
+          "knowledge-base",
+          "knowledge",
+          "knowledge-management",
+          "note-taking",
+          "notes",
+          "card",
+          "cards",
+          "topic",
+          "rag",
+          "retrieval",
+          "citation",
+          "verified",
+          "unverified",
+          "fact-check",
+          "flashcards",
+          "cordis",
+          "plugin",
+          "teaching",
+          "tutor",
+          "学习模式",
+          "知识库",
+          "学习",
+          "卡片",
+          "笔记",
+          "知识管理",
+          "检索",
+          "引用",
+          "未验证",
+          "核实"
+        ],
+        "sortKeys": {
+          "stars": 1
+        }
+      },
+      "versions": [
+        {
+          "version": "0.3.25",
+          "publishTimestamp": 1793440499,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0-rc.2"
+          }
+        }
+      ]
+    }
+  ]
+}
