@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "title": "dsh-study-mode",
+  "title": "学习模式 · dsh-study-mode",
   "description": "DeepSeek Harness plugin index for dsh-study-mode (learning mode): an agent preset that searches a local topic knowledge base before answering, marks answers that came from a card, and marks anything not found as unverified.",
   "metadata": {
     "categories": {
