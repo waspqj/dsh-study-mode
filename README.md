@@ -18,6 +18,7 @@
 📖 中文介绍（掘金）：[DSH 插件「学习模式」：生成本地自己的知识库 联网验证避免AI幻觉](https://juejin.cn/post/7702914241568931875)
 📖 中文介绍（CSDN）：[DSH 插件「学习模式」：生成本地自己的知识库 联网验证避免AI幻觉](https://blog.csdn.net/2502_91433987/article/details/169749354)
 📚 已收录：[awesome-deepseek-harness-plugins](https://github.com/imsai-sh/awesome-deepseek-harness-plugins)（[收录 PR #784](https://github.com/imsai-sh/awesome-deepseek-harness-plugins/pull/784)）
+📚 已收录：[dshworks/awesome-dsh-plugins](https://github.com/dshworks/awesome-dsh-plugins)（**27,444** 条目录 · [收录 PR #207](https://github.com/dshworks/awesome-dsh-plugins/pull/207) · 署名 co-author）
 🏆 官方插件中心：[dsh-study-mode | DSH Plugin](https://dsh-plugin.org/zh/plugins/waspqj/dsh-study-mode)（[收录 Issue #565](https://github.com/dshplugin/dsh-plugin-hub/issues/565)）
 
 一个包给你两样东西：
