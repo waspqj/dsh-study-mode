@@ -26,4 +26,4 @@ description:
   zh: '学习模式 agent 预设 + 主题知识库：回答先从你自己存的卡片里检索，命中就标出处，查不到标「未验证」，必须查证才联网；侧边栏面板按主题浏览、搜索、编辑卡片，每张卡可 AI 校验补充、核实、回退和看版本；卡片之间可以用 [[标题]] 互链，面板里能看到「它连着谁」和「谁引用了它」；新卡片先出预览，确认后才入库；主题名和卡片名都能在界面里改。知识库是本地普通文件，不做后台自动抓取。'
 icon: https://raw.githubusercontent.com/waspqj/dsh-study-mode/main/assets/icon-180.png
 # 预编译包（GitHub Release 托管，钉在 tag 上不会失效）：市场会优先展示它，装的人不用自己构建
-tarball: https://github.com/waspqj/dsh-study-mode/releases/download/v0.3.24/dsh-study-mode-0.3.24.tgz
+tarball: https://github.com/waspqj/dsh-study-mode/releases/download/v0.3.26/dsh-study-mode-0.3.26.tgz
