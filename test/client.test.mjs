@@ -240,6 +240,45 @@ const sandbox = {
     }
     // 宿主兼容报告：面板顶部那行提示的数据源
     if (route.endsWith('/compat')) return okJson(currentCompat)
+    // 主题管理（2026-11-03 用户要求：面板里要能新建/删主题）
+    // 注意：不改 fixtures（共享数据改了会把界面快照带偏 ✓）
+    if (route.endsWith('/topic/create')) {
+      const payload = JSON.parse(options.body || '{}')
+      const name = String(payload.name || '').trim()
+      if (!name) return errJson('主题名称不能为空')
+      const topic = {
+        slug: 'topic-' + name,
+        name,
+        description: '',
+        keywords: [],
+        count: 0,
+        activeCount: 0,
+        archivedCount: 0,
+        updatedAt: '2026-11-03T00:00:00.000Z',
+      }
+      return okJson({ ok: true, slug: topic.slug, topic })
+    }
+    if (route.endsWith('/topic/delete')) {
+      const payload = JSON.parse(options.body || '{}')
+      const slug = String(payload.slug || '')
+      const topic = fixtures.overview.topics.find(item => item.slug === slug)
+      if (!topic) return errJson('主题「' + slug + '」不存在')
+      const cards = topic.count || 0
+      if (cards > 0 && payload.mode !== 'move' && payload.mode !== 'purge') {
+        return errJson('主题「' + topic.name + '」还有 ' + cards + ' 张卡')
+      }
+      return okJson({
+        ok: true,
+        slug,
+        cards,
+        moved: payload.mode === 'move' ? cards : 0,
+        skipped: 0,
+        target: payload.moveTo || null,
+        purged: payload.mode === 'purge',
+        sessionsUnbound: 0,
+        topics: fixtures.overview.topics.filter(item => item.slug !== slug),
+      })
+    }
     // 改名主题（2026-10-26 用户要求：主题名/卡片名都能在 ui 随便改）
     if (route.endsWith('/topic/update')) {
       const payload = JSON.parse(options.body || '{}')
@@ -738,8 +777,110 @@ await check('改完名字保存 → 打到 /topic/update 并刷新', async () =>
   assert.match(JSON.stringify(call.body || {}), /数据库专题/)
 })
 
-await check('卡片详情里能改名', async () => {
+console.log('主题管理（2026-11-03 用户要求：qt 是空的但主题没法删，面板里要能管主题）')
+await check('主题栏底部有「管理主题」入口', async () => {
   forget()
+  const { tree } = await run(Panel, {})
+  const manage = find(tree, node => node.tag === 'button' && textOf(node).trim() === '管理主题')
+  assert.ok(manage, '主题栏底部没有管理主题的按钮')
+})
+
+await check('点开管理主题：列出主题、能新建、能改名、能删', async () => {
+  forget()
+  const first = await run(Panel, {})
+  find(first.tree, node => node.tag === 'button' && textOf(node).trim() === '管理主题').props.onClick()
+  const second = await run(Panel, {})
+  assert.match(second.html, /主题管理/, '管理弹窗没打开')
+  assert.ok(
+    find(second.tree, node => node.tag === 'input' && String(node.props.placeholder || '').includes('主题名称')),
+    '弹窗里没有新建主题的输入框',
+  )
+  const rows = findAll(second.tree, node => String(node.props.className || '').includes('kb-topic-manage-row'))
+  assert.ok(rows.length >= 1, '弹窗里没有列出主题')
+  const ops = findAll(second.tree, node => String(node.props.className || '').includes('kb-topic-manage-ops'))
+  assert.ok(ops.length >= 1, '主题行里没有操作按钮')
+})
+
+await check('删非空主题：先要选卡片怎么办，确认后打 /topic/delete', async () => {
+  forget()
+  const first = await run(Panel, {})
+  find(first.tree, node => node.tag === 'button' && textOf(node).trim() === '管理主题').props.onClick()
+  const second = await run(Panel, {})
+  // 注意：面板里卡片行也有「删除」按钮 → 必须限定在主题管理的那一行里找
+  const row = find(second.tree, node => String(node.props.className || '').includes('kb-topic-manage-row'))
+  assert.ok(row, '主题管理里没有主题行')
+  const delBtn = find(
+    row,
+    node => node.tag === 'button' && String(node.props.className || '').includes('danger') && textOf(node).trim() === '删除',
+  )
+  assert.ok(delBtn, '主题行里没有删除按钮')
+  delBtn.props.onClick()
+  const third = await run(Panel, {})
+  // 非空主题 → 必须出现「把卡片搬到」的选择
+  const select = find(third.tree, node => node.tag === 'select')
+  assert.ok(select, '非空主题没有出现「把卡片搬到」的选择框')
+  const labelTexts = findAll(third.tree, node => node.tag === 'label').map(node => textOf(node))
+  assert.ok(
+    labelTexts.some(text => text.includes('把卡片搬到')),
+    '没有「把卡片搬到」的说明',
+  )
+  assert.ok(
+    labelTexts.some(text => text.includes('连卡片一起删')),
+    '没有「连卡片一起删」的选项',
+  )
+  calls.length = 0
+  const fourth = await run(Panel, {})
+  const confirm = find(
+    fourth.tree,
+    node => node.tag === 'button' && String(node.props.className || '').includes('primary') && textOf(node).trim() === '确认删除',
+  )
+  assert.ok(confirm, '找不到确认删除按钮')
+  // 没选处理方式就点确认 → 不发请求（宿主也会拒）
+  await confirm.props.onClick()
+  assert.ok(!calls.find(item => String(item.url).includes('/topic/delete')), '没选处理方式就发请求了')
+  // 选「把卡片搬到」→ 再确认才发请求
+  const selects = findAll(fourth.tree, node => node.tag === 'select')
+  const moveSelect = selects.find(node => findAll(node, item => item.tag === 'option').some(opt => textOf(opt).trim() === '—'))
+  assert.ok(moveSelect, '找不到「把卡片搬到」的选择框')
+  moveSelect.props.onChange({ target: { value: 'mysql-进阶' } })
+  calls.length = 0
+  const fifth = await run(Panel, {})
+  const confirm2 = find(
+    fifth.tree,
+    node => node.tag === 'button' && String(node.props.className || '').includes('primary') && textOf(node).trim() === '确认删除',
+  )
+  await confirm2.props.onClick()
+  const call = calls.find(item => String(item.url).includes('/topic/delete'))
+  assert.ok(call, '没有调用 /topic/delete')
+  const body = JSON.stringify(call.body || {})
+  assert.match(body, /mysql-进阶/)
+  assert.match(body, /"mode":"move"/)
+})
+
+await check('新建主题：填名字 → 打到 /topic/create', async () => {
+  forget()
+  const first = await run(Panel, {})
+  find(first.tree, node => node.tag === 'button' && textOf(node).trim() === '管理主题').props.onClick()
+  const second = await run(Panel, {})
+  const input = find(
+    second.tree,
+    node => node.tag === 'input' && String(node.props.placeholder || '').includes('主题名称'),
+  )
+  input.props.onChange({ target: { value: '新主题' } })
+  calls.length = 0
+  const third = await run(Panel, {})
+  const create = find(
+    third.tree,
+    node => node.tag === 'button' && textOf(node).trim() === '创建',
+  )
+  assert.ok(create, '找不到创建按钮')
+  await create.props.onClick()
+  const call = calls.find(item => String(item.url).includes('/topic/create'))
+  assert.ok(call, '没有调用 /topic/create')
+  assert.match(JSON.stringify(call.body || {}), /新主题/)
+})
+
+await check('卡片详情里能改名', async () => {  forget()
   const first = await run(Panel, {})
   const card = find(
     first.tree,

@@ -249,6 +249,32 @@ function handleTopicUpdate(body) {
   return { ok: true, ...result, topic }
 }
 
+/** 新建主题（面板的「主题管理」用；slug 撞了会自动另起一个目录 ✓）。 */
+function handleTopicCreate(body) {
+  const name = String(body.name || body.topic || '').trim()
+  if (!name) throw new Error('主题名称不能为空')
+  const slug = store().createTopic(name)
+  const topic = store().listTopics().find(item => item.slug === slug) || null
+  return { ok: true, slug, topic }
+}
+
+/**
+ * 删主题（2026-11-03 用户要求：面板里要能管主题）。
+ *
+ * mode 决定那些卡片怎么办：
+ *   'move'  → 搬到 moveTo 指定的主题，主题本身删掉（卡片不丢）
+ *   'purge' → 连卡片一起删
+ * 不给 mode → 只允许删空主题（主题非空时 store 会抛错 ✓）
+ */
+function handleTopicDelete(body) {
+  const slug = String(body.slug || body.topic || '').trim()
+  if (!slug) throw new Error('缺少主题标识')
+  const mode = String(body.mode || '').trim()
+  const moveTo = body.moveTo ? String(body.moveTo).trim() : ''
+  const result = store().deleteTopic(slug, { mode, moveTo })
+  return { ...result, topics: store().listTopics() }
+}
+
 function handleEntries(params) {
   const topicParam = String(params.get('topic') || '').trim()
   const status = String(params.get('status') || 'active').trim()
@@ -1237,6 +1263,8 @@ const POST_ROUTES = {
   '/add': handleAdd,
   '/update': handleUpdate,
   '/topic/update': handleTopicUpdate,
+  '/topic/create': handleTopicCreate,
+  '/topic/delete': handleTopicDelete,
   '/save': handleSaveBatch,
   '/propose/accept': (body, ctx) => handleProposalAccept(body, ctx),
   '/card/review': (body, ctx) => handleCardReview(ctx, body),

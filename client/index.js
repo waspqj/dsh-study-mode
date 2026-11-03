@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
     /** 面板 id：panellist 的 id 与 main 的 key 必须是同一个 */
     const PANEL_ID = 'learning-kb'
     /** UI 版本号：与 package.json 的 version 一致（check.mjs 会断言），一眼看出页面跑的是哪份 bundle */
-    const UI_REV = '0.3.25'
+    const UI_REV = '0.3.26'
 
     /** 接口前缀，与 plugin/ui.js 的 ROUTE_PREFIX 一致 */
     const API = '/kb/api'
@@ -117,6 +117,28 @@ window.__ModuleLoader__.load({
         topicEditSaved: '主题已更新',
         topicEditHint: '改名不会丢卡片，旧名字照样能搜到',
         topicEditAlias: '旧名字',
+        // 主题管理（2026-11-03 用户要求：「主题没法删，主题管理太麻烦」）
+        topicManage: '管理主题',
+        topicManageTitle: '主题管理',
+        topicManageHint: '新建、改名、删主题都在这儿',
+        topicManageNew: '新建主题',
+        topicManageNewPh: '主题名称',
+        topicManageCreate: '创建',
+        topicManageEmpty: '还没有主题',
+        topicManageDelete: '删除',
+        topicManageMoveTo: '把卡片搬到',
+        topicManagePurge: '连卡片一起删',
+        topicManagePurgeHint: '卡片也会被删掉（当天快照里还能退回来）',
+        topicManageDelEmpty: '这个主题是空的，可以直接删。',
+        topicManageDelAsk: '这个主题还有',
+        topicManageDelAskCards: '张卡，选一种处理方式：',
+        topicManageConfirmDel: '确认删除',
+        topicManageDone: '主题已删除',
+        topicManageMoved: '卡片已搬到「',
+        topicManageMovedEnd: '」',
+        topicManagePurged: '主题和卡片都已删除',
+        topicManageNeedName: '先给主题起个名字',
+        topicManageCreated: '主题已创建',
         cardRename: '改名',
         cardRenameTitle: '卡片标题',
         cardRenameSaved: '卡片已改名',
@@ -334,6 +356,28 @@ window.__ModuleLoader__.load({
         topicEditSaved: 'Topic updated',
         topicEditHint: 'Renaming keeps every card; the old name still works',
         topicEditAlias: 'Former names',
+        // Topic management (2026-11-03: topics could not be deleted, and managing them was clumsy)
+        topicManage: 'Manage topics',
+        topicManageTitle: 'Topic management',
+        topicManageHint: 'Create, rename and delete topics here',
+        topicManageNew: 'New topic',
+        topicManageNewPh: 'Topic name',
+        topicManageCreate: 'Create',
+        topicManageEmpty: 'No topics yet',
+        topicManageDelete: 'Delete',
+        topicManageMoveTo: 'Move cards to',
+        topicManagePurge: 'Delete the cards too',
+        topicManagePurgeHint: 'Cards are deleted as well (today’s snapshot can restore them)',
+        topicManageDelEmpty: 'This topic is empty — it can be deleted right away.',
+        topicManageDelAsk: 'This topic still has',
+        topicManageDelAskCards: 'cards. Choose what to do with them:',
+        topicManageConfirmDel: 'Delete topic',
+        topicManageDone: 'Topic deleted',
+        topicManageMoved: 'Cards moved to “',
+        topicManageMovedEnd: '”',
+        topicManagePurged: 'Topic and cards deleted',
+        topicManageNeedName: 'Give the topic a name first',
+        topicManageCreated: 'Topic created',
         cardRename: 'Rename',
         cardRenameTitle: 'Card title',
         cardRenameSaved: 'Card renamed',
@@ -526,6 +570,17 @@ window.__ModuleLoader__.load({
 .kb-topic:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent);color:var(--dsw-alias-label-primary)}
 .kb-topic.on{background:color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 16%,transparent);color:var(--dsw-alias-label-primary);font-weight:600;box-shadow:inset 3px 0 0 var(--kb-tc,var(--kb-accent))}
 .kb-topic .kb-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 主题管理弹窗（2026-11-03：面板里要能新建/改名/删主题） */
+.kb-topic-manage-new{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+.kb-topic-manage-new .kb-input{flex:1 1 auto}
+.kb-topic-manage-list{display:flex;flex-direction:column;gap:2px;margin-bottom:10px}
+.kb-topic-manage-row{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:7px}
+.kb-topic-manage-row:hover{background:color-mix(in srgb,var(--dsw-alias-label-primary) 6%,transparent)}
+.kb-topic-manage-name{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0;font-size:12.5px;color:var(--dsw-alias-label-primary)}
+.kb-topic-manage-name .kb-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kb-topic-manage-name .kb-n{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.kb-topic-manage-ops{display:flex;gap:6px;flex:none}
+.kb-topic-manage-check{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dsw-alias-label-primary);margin:6px 0}
 .kb-topic .kb-n{flex:none;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .kb-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--kb-tc,var(--kb-accent));box-shadow:0 0 0 3px color-mix(in srgb,var(--kb-tc,var(--kb-accent)) 18%,transparent)}
 .kb-rail-cap{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary);opacity:.9;padding:2px 10px 6px}
@@ -2172,6 +2227,226 @@ mark.kb-hl-run{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 
       )
     }
 
+    // ---------------------------------------------------------------- 主题管理
+    /**
+     * 主题管理弹窗：新建 / 改名 / 删除。
+     *
+     * 2026-11-03 用户要求：「qt 是空的，但主题没法删，主题的管理太麻烦了，
+     * 在控制面板给我能管理主题的功能」。
+     *
+     * 删除的语义**交给用户在弹窗里定**（不替他决定卡片去哪儿）：
+     *   空主题   → 直接删
+     *   非空主题 → 选「把卡片搬到另一个主题」或「连卡片一起删」
+     * 宿主的 store.deleteTopic 在没给这两种之一时会拒绝删非空主题 ✓，
+     * 所以这里必须把选择做出来才发请求 ✓（后端兜底，前端先问 ✓）。
+     */
+    function TopicManager(props) {
+      const { topics, t, onCancel, onSaved, onEdit } = props
+      const [name, setName] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [error, setError] = useState('')
+      // 正在删的主题；null = 不在删除流程里
+      const [deleting, setDeleting] = useState(null)
+      const [moveTo, setMoveTo] = useState('')
+      const [purge, setPurge] = useState(false)
+
+      const create = async () => {
+        if (!name.trim()) return setError(t('topicManageNeedName'))
+        setBusy(true)
+        setError('')
+        try {
+          await apiPost('/topic/create', { name: name.trim() })
+          setName('')
+          onSaved(t('topicManageCreated'))
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const doDelete = async () => {
+        if (!deleting) return
+        const count = deleting.count || 0
+        if (count > 0 && !purge && !moveTo) {
+          setError(t('topicManageDelAskCards'))
+          return
+        }
+        setBusy(true)
+        setError('')
+        try {
+          const body = { slug: deleting.slug }
+          if (count > 0) {
+            if (purge) body.mode = 'purge'
+            else {
+              body.mode = 'move'
+              body.moveTo = moveTo
+            }
+          }
+          const result = await apiPost('/topic/delete', body)
+          setDeleting(null)
+          setMoveTo('')
+          setPurge(false)
+          onSaved(result)
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const others = topics.filter(item => !deleting || item.slug !== deleting.slug)
+
+      // 正在删某个主题：先问清楚卡片怎么办
+      if (deleting) {
+        const count = deleting.count || 0
+        return h(
+          'div',
+          { className: 'kb-overlay', onClick: onCancel },
+          h(
+            'div',
+            { className: 'kb-modal', onClick: event => event.stopPropagation() },
+            h(
+              'div',
+              { className: 'kb-modal-head' },
+              h('div', { className: 'kb-modal-title' }, t('topicManageDelete') + '：' + deleting.name),
+              h('button', { className: 'kb-btn', onClick: onCancel }, t('close')),
+            ),
+            h(
+              'div',
+              { className: 'kb-modal-body' },
+              count > 0
+                ? h(
+                    'div',
+                    null,
+                    h(
+                      'div',
+                      { className: 'kb-note' },
+                      t('topicManageDelAsk') + ' ' + count + ' ' + t('topicManageDelAskCards'),
+                    ),
+                    h(
+                      'label',
+                      null,
+                      t('topicManageMoveTo'),
+                      h(
+                        'select',
+                        {
+                          className: 'kb-select',
+                          value: moveTo,
+                          onChange: event => {
+                            setMoveTo(event.target.value)
+                            setPurge(false)
+                          },
+                        },
+                        h('option', { value: '' }, '—'),
+                        others.map(item => h('option', { key: item.slug, value: item.slug }, item.name + ' (' + item.count + ')')),
+                      ),
+                    ),
+                    h(
+                      'label',
+                      { className: 'kb-topic-manage-check' },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: purge,
+                        onChange: event => {
+                          setPurge(event.target.checked)
+                          if (event.target.checked) setMoveTo('')
+                        },
+                      }),
+                      h('span', null, t('topicManagePurge')),
+                    ),
+                    h('div', { className: 'kb-note' }, t('topicManagePurgeHint')),
+                  )
+                : h('div', { className: 'kb-note' }, t('topicManageDelEmpty')),
+              error ? h('div', { className: 'kb-err' }, error) : null,
+            ),
+            h(
+              'div',
+              { className: 'kb-modal-foot' },
+              h('span', { className: 'kb-grow' }),
+              h('button', { className: 'kb-btn primary', disabled: busy, onClick: doDelete }, t('topicManageConfirmDel')),
+              h('button', { className: 'kb-btn', disabled: busy, onClick: onCancel }, t('cancel')),
+            ),
+          ),
+        )
+      }
+
+      return h(
+        'div',
+        { className: 'kb-overlay', onClick: onCancel },
+        h(
+          'div',
+          { className: 'kb-modal', onClick: event => event.stopPropagation() },
+          h(
+            'div',
+            { className: 'kb-modal-head' },
+            h('div', { className: 'kb-modal-title' }, t('topicManageTitle')),
+            h('button', { className: 'kb-btn', onClick: onCancel }, t('close')),
+          ),
+          h(
+            'div',
+            { className: 'kb-modal-body' },
+            h(
+              'div',
+              { className: 'kb-topic-manage-new' },
+              h('input', {
+                className: 'kb-input',
+                placeholder: t('topicManageNewPh'),
+                value: name,
+                onChange: event => setName(event.target.value),
+              }),
+              h('button', { className: 'kb-btn', disabled: busy, onClick: create }, t('topicManageCreate')),
+            ),
+            topics.length
+              ? h(
+                  'div',
+                  { className: 'kb-topic-manage-list' },
+                  topics.map(item =>
+                    h(
+                      'div',
+                      { className: 'kb-topic-manage-row', key: item.slug },
+                      h(
+                        'div',
+                        { className: 'kb-topic-manage-name' },
+                        h('span', { className: 'kb-dot', style: { '--kb-tc': item.color || 'var(--kb-accent)' } }),
+                        h('span', { className: 'kb-name' }, item.name),
+                        h('span', { className: 'kb-n' }, String(item.count)),
+                      ),
+                      h(
+                        'div',
+                        { className: 'kb-topic-manage-ops' },
+                        h('button', { className: 'kb-btn', onClick: () => onEdit(item) }, t('topicEdit')),
+                        h(
+                          'button',
+                          {
+                            className: 'kb-btn danger',
+                            onClick: () => {
+                              setDeleting(item)
+                              setMoveTo('')
+                              setPurge(false)
+                              setError('')
+                            },
+                          },
+                          t('topicManageDelete'),
+                        ),
+                      ),
+                    ),
+                  ),
+                )
+              : h('div', { className: 'kb-note' }, t('topicManageEmpty')),
+            h('div', { className: 'kb-note' }, t('topicManageHint')),
+            error ? h('div', { className: 'kb-err' }, error) : null,
+          ),
+          h(
+            'div',
+            { className: 'kb-modal-foot' },
+            h('span', { className: 'kb-grow' }),
+            h('button', { className: 'kb-btn', onClick: onCancel }, t('close')),
+          ),
+        ),
+      )
+    }
+
     // ---------------------------------------------------------------- 主面板
     /** 由 apply 注入的翻译函数（locale 服务就绪后才拿得到） */
     let translate = (key) => (DICT.zh[key] !== undefined ? DICT.zh[key] : key)
@@ -2234,6 +2509,8 @@ mark.kb-hl-run{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 
       const [detail, setDetail] = useState(null)
       // 正在编辑的主题（改名/改说明/改关键词/改领域）
       const [editingTopic, setEditingTopic] = useState(null)
+      // 主题管理弹窗（新建 / 改名 / 删主题）—— 2026-11-03 用户要求
+      const [managing, setManaging] = useState(false)
       // 打开详情前正在取正文全文（列表只给摘要）
       const [detailLoading, setDetailLoading] = useState(false)
       const [multi, setMulti] = useState(false)
@@ -2731,7 +3008,21 @@ mark.kb-hl-run{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 
                 ),
               ),
             ),
-            h('div', { className: 'kb-rail-foot' }, '共 ' + totalAll + ' 条'),
+            h(
+              'div',
+              { className: 'kb-rail-foot' },
+              h('span', null, '共 ' + totalAll + ' 条'),
+              h(
+                'button',
+                {
+                  className: 'kb-btn',
+                  style: { marginLeft: '8px' },
+                  title: t('topicManageHint'),
+                  onClick: () => setManaging(true),
+                },
+                t('topicManage'),
+              ),
+            ),
           ),
           h(
             'section',
@@ -2912,6 +3203,30 @@ mark.kb-hl-run{background:color-mix(in srgb,var(--dsw-alias-state-warn-primary) 
               onSaved: () => {
                 setEditingTopic(null)
                 flash(t('topicEditSaved'))
+                refresh()
+              },
+            })
+          : null,
+        managing
+          ? h(TopicManager, {
+              topics,
+              t,
+              onCancel: () => setManaging(false),
+              onEdit: item => {
+                setManaging(false)
+                setEditingTopic(item)
+              },
+              onSaved: result => {
+                // 删完主题：当前选中的主题可能已经没了 → 回到「全部」
+                if (result && result.slug && result.slug === topic) setTopic('')
+                setManaging(false)
+                flash(
+                  result && result.purged
+                    ? t('topicManagePurged')
+                    : result && result.moved
+                      ? t('topicManageMoved') + (result.target || '') + t('topicManageMovedEnd')
+                      : t('topicManageDone'),
+                )
                 refresh()
               },
             })

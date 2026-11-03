@@ -304,6 +304,44 @@ const jsonHeaders = { 'content-type': 'application/json', origin: SELF_ORIGIN }
 const post = (route, body) => call({ method: 'POST', url: ROUTE_PREFIX + route, headers: jsonHeaders, body })
 const get = (route) => call({ method: 'GET', url: ROUTE_PREFIX + route, headers: { origin: SELF_ORIGIN } })
 
+console.log('主题管理（2026-11-03 用户要求：面板里要能新建/删主题）')
+await check('POST /topic/create 建主题', async () => {
+  const res = await post('/topic/create', { name: '面板建的主题' })
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.equal(res.json.topic.name, '面板建的主题')
+})
+
+await check('POST /topic/delete 删空主题', async () => {
+  const created = await post('/topic/create', { name: '待删的空主题' })
+  const slug = created.json.slug
+  const res = await post('/topic/delete', { slug })
+  assert.equal(res.statusCode, 200)
+  assert.equal(res.json.ok, true)
+  assert.equal(res.json.cards, 0)
+  assert.ok(!res.json.topics.some(item => item.slug === slug), '主题应该没了')
+})
+
+await check('POST /topic/delete 删非空主题：先得说清卡片怎么办', async () => {
+  const created = await post('/topic/create', { name: '有卡的待删主题' })
+  const slug = created.json.slug
+  store.planSave({ topic: slug, cards: [{ title: '一张卡', body: 'x' }], dryRun: false })
+  const refused = await post('/topic/delete', { slug })
+  assert.equal(refused.statusCode, 400)
+  assert.match(refused.json.error, /还有 1 张卡/)
+  const other = await post('/topic/create', { name: '接住卡片的主题' })
+  const moved = await post('/topic/delete', { slug, mode: 'move', moveTo: other.json.slug })
+  assert.equal(moved.statusCode, 200)
+  assert.equal(moved.json.moved, 1)
+  assert.ok(!moved.json.topics.some(item => item.slug === slug), '源主题应该没了')
+})
+
+await check('POST /topic/delete 缺主题标识要报错', async () => {
+  const res = await post('/topic/delete', {})
+  assert.equal(res.statusCode, 400)
+  assert.match(res.json.error, /缺少主题标识/)
+})
+
 console.log('列表只发摘要，正文全文另取（审计 P1-8）')
 await check('/entries 里长正文只发 160 字摘要，并标出原文长度', async () => {
   const longBody = '首行结论：间隙锁锁住索引记录之间的间隙，阻止其它事务插入新行。\n' + '要点'.repeat(120)

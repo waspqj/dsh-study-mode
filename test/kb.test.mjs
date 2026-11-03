@@ -662,6 +662,106 @@ console.log('主题改名')
     assert.throws(() => s.updateTopic('压根没有这个主题', { name: 'x' }), /不存在/)
   })
 
+  // ---------------------------------------------------------------- 删主题
+  // 2026-11-03 用户要求：「主题没法删，主题的管理太麻烦了」。
+  // 这里锁住删除的三种语义：空主题直接删 / 搬到别的主题 / 连卡片一起删。
+  check('删主题：空主题可以直接删掉', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-del-empty-'))
+    const c = createStore(cn)
+    const slug = c.createTopic('空的')
+    const result = c.deleteTopic(slug)
+    assert.equal(result.ok, true)
+    assert.equal(result.cards, 0)
+    assert.ok(!fs.existsSync(path.join(cn, 'topics', slug)), '主题目录应该没了')
+    assert.equal(c.listTopics().length, 0)
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  check('删主题：非空主题没给处理方式要报错（不替用户决定卡片去哪儿）', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-del-ask-'))
+    const c = createStore(cn)
+    const slug = c.createTopic('有卡的')
+    c.planSave({ topic: slug, cards: [{ title: '卡片一', body: 'x' }], dryRun: false })
+    assert.throws(() => c.deleteTopic(slug), /还有 1 张卡/)
+    assert.ok(fs.existsSync(path.join(cn, 'topics', slug)), '报错了就不能删')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  check('删主题：搬卡片到另一个主题，卡片一条不少', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-del-move-'))
+    const c = createStore(cn)
+    const from = c.createTopic('旧主题')
+    const to = c.createTopic('新主题')
+    c.planSave({ topic: from, cards: [{ title: '卡片一', body: 'x' }, { title: '卡片二', body: 'y' }], dryRun: false })
+    const result = c.deleteTopic(from, { mode: 'move', moveTo: to })
+    assert.equal(result.moved, 2)
+    assert.equal(result.target, to)
+    assert.ok(!fs.existsSync(path.join(cn, 'topics', from)), '源主题目录应该没了')
+    const moved = c.readEntries(to)
+    assert.equal(moved.length, 2)
+    for (const entry of moved) assert.equal(entry.topic, to, '搬过去的卡要改主题字段')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  check('删主题：目标里已有同 id 的卡就跳过，不覆盖', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-del-dup-'))
+    const c = createStore(cn)
+    const from = c.createTopic('源')
+    const to = c.createTopic('目标')
+    c.planSave({ topic: from, cards: [{ title: '同名卡', body: 'x' }], dryRun: false })
+    // 目标主题里塞一条同 id 的卡（模拟「以前搬过一轮」留下的重复）
+    const targetFile = path.join(cn, 'topics', to, 'kb.jsonl')
+    const dup = JSON.stringify({
+      id: c.readEntries(from)[0].id,
+      topic: to,
+      kind: 'point',
+      title: '同名卡',
+      normTitle: '同名卡',
+      body: 'y',
+      tags: [],
+      source: null,
+      verified: false,
+      appliesTo: null,
+      status: 'active',
+      version: 1,
+    })
+    fs.writeFileSync(targetFile, dup + '\n', 'utf8')
+    const result = c.deleteTopic(from, { mode: 'move', moveTo: to })
+    assert.equal(result.moved, 0)
+    assert.equal(result.skipped, 1)
+    assert.equal(c.readEntries(to).length, 1, '目标里还是那一张')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  check('删主题：连卡片一起删（purge）', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-del-purge-'))
+    const c = createStore(cn)
+    const slug = c.createTopic('要清空')
+    c.planSave({ topic: slug, cards: [{ title: '卡片一', body: 'x' }], dryRun: false })
+    const result = c.deleteTopic(slug, { mode: 'purge' })
+    assert.equal(result.purged, true)
+    assert.equal(result.cards, 1)
+    assert.ok(!fs.existsSync(path.join(cn, 'topics', slug)))
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  check('删主题：绑在这个主题上的会话要解绑，默认主题也要清掉', () => {
+    const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-del-bind-'))
+    const c = createStore(cn)
+    const slug = c.createTopic('被绑的')
+    c.bindTopic('session-1', slug)
+    c.setDefaultTopic(slug)
+    const result = c.deleteTopic(slug)
+    assert.equal(result.sessionsUnbound, 1)
+    assert.equal(c.currentTopic('session-1'), null, '解绑后不再指向删掉的主题')
+    assert.equal(c.getDefaultTopic(), null, '默认主题要清掉')
+    fs.rmSync(cn, { recursive: true, force: true })
+  })
+
+  check('删主题：不存在的主题要报错', () => {
+    assert.throws(() => s.deleteTopic('压根没有这个主题'), /不存在/)
+  })
+
   check('slug 撞车：「C++」不能顶掉已有的「C#」', () => {
     const cn = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-collide-'))
     const c = createStore(cn)

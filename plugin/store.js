@@ -894,6 +894,98 @@ export function createStore(root) {
     return { slug: key, name: next.name || key, renamed }
   }
 
+  /**
+   * 删主题（2026-11-03 用户要求：「主题没法删，主题管理太麻烦」）。
+   *
+   * 三种模式：
+   *   默认（主题是空的）→ 直接删掉这个主题目录。
+   *   mode:'move'        → 把卡片整批搬到另一个主题，再删掉这个主题（卡片不丢）。
+   *   mode:'purge'       → 连卡片一起删（危险；调用方必须明确要求）。
+   *
+   * 主题非空又没给模式 → 直接抛错，让界面先问用户「这些卡片怎么办」。
+   * 这条是故意的：不替用户做「卡片去哪儿」的决定。
+   *
+   * 删目录 ≠ 删备份：backups/<slug>/ 里的日快照留着（备份轮转只认那套命名 ✓），
+   * 所以「删错了还能退回去」这件事仍然成立 ✓。
+   *
+   * 会话绑定：绑在这个主题上的会话改成「没绑主题」——
+   * 否则它们下次取默认主题会拿到一个已经不存在的 slug（界面和工具都会报「主题不存在」）。
+   * 默认主题指向它时也一并清掉。
+   */
+  function deleteTopic(slug, options = {}) {
+    const key = String(slug ?? '').trim()
+    if (!key) throw new Error('缺少主题标识')
+    ensureRoot()
+    if (!fs.existsSync(topicDir(key))) throw new Error(`主题「${key}」不存在`)
+    const mode = String(options.mode || '').trim()
+    const entries = readEntries(key)
+    const total = entries.length
+
+    if (total > 0 && mode !== 'move' && mode !== 'purge') {
+      const label = readMeta(key).name || key
+      throw new Error(`主题「${label}」还有 ${total} 张卡：先选搬到哪个主题，或明确要连卡片一起删`)
+    }
+
+    let moved = 0
+    let skipped = 0
+    let target = null
+    if (mode === 'move') {
+      const to = String(options.moveTo || '').trim()
+      if (!to) throw new Error('要搬卡片就得说搬到哪个主题')
+      if (to === key) throw new Error('不能搬到它自己')
+      if (!fs.existsSync(topicDir(to))) throw new Error(`目标主题「${to}」不存在`)
+      target = to
+      const existing = readEntries(to)
+      const seen = new Set(existing.map(entry => entry.id).filter(Boolean))
+      const keep = existing.slice()
+      for (const entry of entries) {
+        // 目标里已经有同 id 的卡（以前搬过一轮）：跳过，不覆盖目标里的那条
+        if (entry.id && seen.has(entry.id)) {
+          skipped++
+          continue
+        }
+        const movedEntry = { ...entry, topic: to, updatedAt: now() }
+        if (movedEntry.id) seen.add(movedEntry.id)
+        keep.push(movedEntry)
+        moved++
+      }
+      writeEntries(to, keep)
+    }
+
+    // 删目录：空主题默认走这里，move / purge 也走这里
+    fs.rmSync(topicDir(key), { recursive: true, force: true })
+    cache.delete(topicFile(key))
+
+    // 会话绑定：绑在这个主题上的会话改成「没绑主题」
+    const bindings = readBindings()
+    let sessionsUnbound = 0
+    for (const [sessionId, binding] of Object.entries(bindings)) {
+      if (binding && binding.topic === key) {
+        bindings[sessionId] = { ...binding, topic: '' }
+        sessionsUnbound++
+      }
+    }
+    if (sessionsUnbound) writeBindings(bindings)
+
+    // 默认主题指向它 → 清掉（否则新会话会绑到一个不存在的 slug）
+    const settings = readSettings()
+    if (settings.defaultTopic === key) {
+      delete settings.defaultTopic
+      writeSettings(settings)
+    }
+
+    return {
+      ok: true,
+      slug: key,
+      cards: total,
+      moved,
+      skipped,
+      target,
+      purged: mode === 'purge',
+      sessionsUnbound,
+    }
+  }
+
   function readBindings() {
     try {
       const parsed = JSON.parse(fs.readFileSync(bindingsFile, 'utf8'))
@@ -2538,6 +2630,7 @@ export function createStore(root) {
     findTopic,
     createTopic,
     updateTopic,
+    deleteTopic,
     resolveSlug,
     readEntries,
     topicStamp,
