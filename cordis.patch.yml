@@ -41,8 +41,11 @@
                 你是「学习模式」agent：把知识学进主题知识库，用主题知识库回答问题。
 
                 ## 〇、素材纪律（优先级最高）
-                - 工作区里的文件、课件、图片不是知识来源，用户没明确指名就不要去翻。
-                - 回答问题默认不做任何文件操作；需要来源就问用户一句。
+                - **用户让你把工作区里的文件 / 课件 / 图片整理成知识卡片时，就去解析那些文件** ——
+                  这是学习模式的主要用途之一。该读的读、该扫的扫（ops_glob / ops_bash / read 都能用），
+                  解析完整理成卡片给用户确认。用户点名的文件更是直接去读。
+                - **但回答一般问题时不要自己翻工作区**：先查知识库；用户没指名要哪个文件、
+                  也不像是要入库时，问一句再动手，不要拿着问题去搜一整个目录。
 
                 ## 一、回答：三级检索，不许跳级
                 ① 知识库：一次 learn_search 就够（默认 scope=auto）。命中就用它，标 [主题:名称]；
@@ -121,26 +124,109 @@
                 除了这条提议通道，其它需要用户拍板的问题（选主题、要不要覆盖）照旧用 ask_user_question；用户没点（超时/跳过）就是没同意，不许当成同意往下写。
 
                 ## 五、改与删
-                改用 learn_update（按 id），删用 learn_delete（默认归档，可恢复）；动手前先告诉用户你要动哪一条。**这两个工具默认不提供**（环境里没有就别提改和删）。
+                改用 learn_update（按 id），删用 learn_delete（默认归档，可恢复）；动手前先告诉用户你要动哪一条。**这两个工具默认没挂上**（它们的 schema 每次请求都要带，约 900 token）：**用户明确要改或删某张卡时，先调 learn_enable_edit 把它们挂上**，再用 learn_update / learn_delete 去做；用户没提就别碰。
 
                 ## 六、硬约束
                 - 写库只用 learn_save。不准编造来源；不确定就说不确定。
                 - learn_* 报错如实转述；同一个错出现两次就停下读插件源码，不要换参数形状重试。
                 - 用中文回答，先给结论再给依据。
 
+          - id: agent-instructions
+            name: '@deepseek-ai/dsh-agent-instructions'
+            config:
+              maxBytes: 65536
           - id: time-context
             name: '@deepseek-ai/dsh-time-context'
-          - id: tool-web
-            name: '@deepseek-ai/dsh-tool-web'
+          - id: tool-jobs
+            name: '@deepseek-ai/dsh-tool-jobs'
+          - id: tool-schedule
+            name: '@deepseek-ai/dsh-tool-schedule'
+          - id: skill-filesystem
+            name: '@deepseek-ai/dsh-skill-filesystem'
+          - id: tool-skill
+            name: '@deepseek-ai/dsh-tool-skill'
+          - id: command-goal
+            name: '@deepseek-ai/dsh-command-goal'
+          - id: tool-goal
+            name: '@deepseek-ai/dsh-tool-goal'
+          - id: planning
+            name: cordis:group
+            group: true
+            isolate:
+              planMode: true
             config:
-              fetch: true
-              searchTimeoutMs: 60000
+              - id: plan-mode
+                name: '@deepseek-ai/dsh-plan-mode'
+                config:
+                  section: |
+                    You are in plan mode. Stay in plan mode until the user approves your plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+                    Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+                    The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+                    Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+                    Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+                    When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+          - id: compaction
+            name: cordis:group
+            group: true
+            isolate:
+              compaction: true
+              toolResultPruner: true
+            config:
+              - id: compaction-basic
+                name: '@deepseek-ai/dsh-compaction-basic'
+              - id: command-compact
+                name: '@deepseek-ai/dsh-command-compact'
+              - id: tool-result-pruner
+                name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+                config:
+                  thresholdChars: 8192
+                  headChars: 4096
+                  tailChars: 1024
+          - id: delegation
+            name: cordis:group
+            group: true
+            isolate:
+              workflowEngine: true
+            config:
+              - id: tool-subagent-control
+                name: '@deepseek-ai/dsh-tool-subagent-control'
+              - id: tool-subagent
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: spawn
+                  toolName: subagent
+                  modelSelection: true
+                  modelDiscovery: true
+              - id: tool-subagent-fork
+                name: '@deepseek-ai/dsh-tool-subagent'
+                config:
+                  provider: fork
+                  toolName: subagent_fork
+              - id: workflow-ptc
+                name: '@deepseek-ai/dsh-workflow-ptc'
+                config:
+                  provider: spawn
+              - id: tool-workflow
+                name: '@deepseek-ai/dsh-tool-workflow'
           - id: tool-ask-user
             name: '@deepseek-ai/dsh-tool-ask-user'
           - id: tool-todo
             name: '@deepseek-ai/dsh-tool-todo'
             config:
               allowParallelInProgress: true
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
+          - id: present
+            name: '@deepseek-ai/dsh-tool-present'
+          - id: tool-plugin-manager
+            name: '@deepseek-ai/dsh-plugin-manager/tools'
+            disabled: !!js "!ctx.get('profileContext')"
+          - id: tool-plugin-market
+            name: '@deepseek-ai/dsh-plugin-market/tools'
+            disabled: true
           - id: learning-kb
             # 工具行用子路径：裸包名被 UI 半边占了（见上面第 2 条约束）。
             # 子路径行不参与浏览器半侧扫描，工具本来也不需要。

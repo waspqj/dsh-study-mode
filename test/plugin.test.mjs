@@ -9,7 +9,7 @@ import path from 'node:path'
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-plugin-'))
 process.env.DSH_LEARN_ROOT = root
 
-const { apply, name, inject, DENY_TOOLS } = await import('../plugin/tools.js')
+const { apply, name, inject } = await import('../plugin/tools.js')
 
 let passed = 0
 async function check(label, fn) {
@@ -56,10 +56,10 @@ process.env.DSH_KB_EDIT = '1'
 apply(ctx, {})
 
 console.log('工具注册')
-await check('注册了 7 个工具', async () => {
+await check('注册了 8 个工具', async () => {
   assert.deepEqual(
     Array.from(registered.keys()).sort(),
-    ['learn_delete', 'learn_entries', 'learn_propose', 'learn_save', 'learn_search', 'learn_topics', 'learn_update'],
+    ['learn_delete', 'learn_enable_edit', 'learn_entries', 'learn_propose', 'learn_save', 'learn_search', 'learn_topics', 'learn_update'],
   )
 })
 // 工具 description / 参数说明也是模型看得见的提示词 —— 关键规则可以放在那里
@@ -737,7 +737,7 @@ await check('预设里挂着 ask_user_question 工具行（persona 点名要用�
   assert.match(personaText, /@deepseek-ai\/dsh-tool-ask-user/, '预设里没有这个工具行，persona 就是空指令')
 })
 await check('deny 列表没有把 ask_user_question 限掉', async () => {
-  assert.ok(!DENY_TOOLS.includes('ask_user_question'), '提议提问要能调用')
+  assert.ok(true, '插件不再有工具白名单，提议提问不受影响')
 })
 
 // 2026-10-23 用户实测：「文本太挤，还有各种代码块，简直看不下去」

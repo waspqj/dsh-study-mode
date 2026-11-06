@@ -15,7 +15,7 @@ import path from 'node:path'
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'study-kb-schema-'))
 process.env.DSH_LEARN_ROOT = root
 
-const { apply, MUST_KEEP, DENY_TOOLS } = await import('../plugin/tools.js')
+const { apply } = await import('../plugin/tools.js')
 
 let passed = 0
 async function check(label, fn) {
@@ -45,14 +45,23 @@ const ctx = {
 apply(ctx, {})
 
 console.log('工具暴露面（改 / 删默认不暴露给模型）')
-await check('默认只注册 5 个工具：改 / 删两个不发给模型', async () => {
+await check('默认只注册 6 个工具：改 / 删两个不发给模型（但留了 learn_enable_edit）', async () => {
   // 2026-10-23 用户：「我不说要删改条目为什么要每次都发过去」
   // —— 工具 schema 每次请求都随 tools 一起发，改/删两个加起来约 1200 字。
   assert.deepEqual(
     Array.from(registered.keys()).sort(),
-    ['learn_entries', 'learn_propose', 'learn_save', 'learn_search', 'learn_topics'],
+    ['learn_enable_edit', 'learn_entries', 'learn_propose', 'learn_save', 'learn_search', 'learn_topics'],
   )
 })
+await check('调 learn_enable_edit 就把改 / 删工具挂上（2026-11-06 用户定：默认关，具体提出来了再主动调用）', async () => {
+  const enable = registered.get('learn_enable_edit')
+  assert.ok(enable, '默认就该有 learn_enable_edit')
+  const result = enable.execute({ reason: '把这条卡改一下' }, { agent: { id: 'sess-schema' } })
+  assert.equal(result.enabled, true, '应该挂载成功')
+  assert.ok(registered.get('learn_update'), '挂上后要有 learn_update')
+  assert.ok(registered.get('learn_delete'), '挂上后要有 learn_delete')
+})
+
 await check('打开设置后改 / 删两个工具才注册', async () => {
   const settingsFile = path.join(root, 'settings.json')
   fs.writeFileSync(settingsFile, JSON.stringify({ kbEditTools: true }))
@@ -378,41 +387,19 @@ await check('全都已存在时直接说已经有了', async () => {
   assert.match(rendered, /已经有了/)
 })
 
-console.log('工具限制：不能动宿主接管面')
-await check('注册了 agent/created 监听', async () => {
-  assert.ok(listeners.get('agent/created'), '应注册 agent/created 监听')
+console.log('工具可见性：插件不许藏用户的工具（2026-11-06 用户定的）')
+await check('不注册 agent/created 的限制监听', async () => {
+  assert.equal(listeners.get('agent/created'), undefined, '插件不该再监听 agent/created 去限制工具')
 })
 
-await check('deny 列表绝不包含 ops_* / pwsh / MUST_KEEP 里的工具', async () => {
-  for (const name of DENY_TOOLS) {
-    assert.ok(!name.startsWith('ops_'), `ops_ 系列不能被限制：${name}`)
-    assert.notEqual(name, 'pwsh', 'pwsh 属于 dsh-ops 接管面')
-    assert.ok(!MUST_KEEP.includes(name), `MUST_KEEP 里的工具不能被限制：${name}`)
-  }
-})
-
-await check('MUST_KEEP 覆盖宿主 hide-official 要求的 8 个 OPS 替身', async () => {
-  const required = ['ops_replace', 'ops_write_file', 'ops_edit_file', 'ops_diff', 'ops_stat', 'ops_copy', 'ops_move', 'ops_remove']
-  for (const name of required) {
-    assert.ok(MUST_KEEP.includes(name), `MUST_KEEP 缺 ${name}`)
-  }
-})
-
-await check('实际限制时不会砍掉接管面（模拟宿主调用）', async () => {
-  const applied = []
-  const fakeTools = {
-    get(name) {
-      return { name }
-    },
-    restrict(filter) {
-      applied.push(filter)
-      return () => applied.pop()
-    },
-  }
-  listeners.get('agent/created').call({ ctx: { tools: fakeTools } })
-  assert.equal(applied.length, 1, '应调用了一次 restrict')
-  const deny = applied[0].deny
-  for (const name of MUST_KEEP) assert.ok(!deny.includes(name), `${name} 不该被限制`)
+await check('源码里没有任何 tools.restrict 调用', async () => {
+  const source = fs.readFileSync(new URL('../plugin/tools.js', import.meta.url), 'utf8')
+  // 只看代码，不看注释（注释里可以解释「为什么删掉了白名单」）
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  assert.ok(!/tools\.restrict\s*\(/.test(code), '插件不该调用 ctx.tools.restrict：每个人的 DSH 装的插件不一样，白名单既禁不全又会误伤')
+  assert.ok(!/DENY_TOOLS|KEEP_TOOLS|MUST_KEEP/.test(code), '插件里不该再有工具白名单常量')
 })
 
 fs.rmSync(root, { recursive: true, force: true })

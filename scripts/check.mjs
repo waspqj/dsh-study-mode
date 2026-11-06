@@ -185,6 +185,37 @@ for (const row of ['@deepseek-ai/dsh-persona', '@deepseek-ai/dsh-tool-web', '@de
   if (!patch.includes(row)) fail(`预设缺少插件行：${row}`)
 }
 
+// 4a. 预设必须自带整套宿主工具行（2026-11-06 用户报「学习模式下 /compact 都没了」查出来的）
+// 机制：预设的 `plugins:` 不是「额外加的工具」，而是**这个 agent 的工具清单** ——
+// 每个预设都在自己的作用域里声明全套（宿主 standard 预设见 dsh-web-app/presets/standard.patch.yml）。
+// 少写一行，那个 agent 就少一个工具：/compact、subagent、skill、plan-mode、后台任务、定时提醒全没。
+// 文件/命令行的 dsh-tool-fs / dsh-tool-bash / dsh-tool-pwsh / dsh-tool-fs-search **故意不写**
+// —— 宿主 dsh-ops 的 ops_* 已经提供这些能力，重复挂载会撞（见上面第 3 条）。
+const REQUIRED_PRESET_ROWS = [
+  'persona', 'agent-instructions', 'time-context',
+  'tool-jobs', 'tool-schedule', 'skill-filesystem', 'tool-skill',
+  'command-goal', 'tool-goal',
+  'planning', 'compaction', 'delegation',
+  'tool-ask-user', 'tool-todo', 'tool-web', 'present',
+  'tool-plugin-manager', 'tool-plugin-market',
+  'learning-kb',
+]
+for (const row of REQUIRED_PRESET_ROWS) {
+  if (!new RegExp(`^ {10}- id: ${row}\\s*$`, 'm').test(patch)) {
+    fail(`预设缺少插件行：${row} —— 预设的 plugins 就是这个 agent 的工具清单，少一行那个工具就没了`)
+  }
+}
+// /compact 在 compaction 组里
+if (!/- id: command-compact/.test(patch)) {
+  fail('预设缺少 command-compact —— 学习模式就没有 /compact 命令')
+}
+// 三个组必须保留 isolate：服务泄漏到根作用域时宿主会拒绝挂载整个预设
+for (const key of ['planMode', 'compaction', 'workflowEngine']) {
+  if (!new RegExp(`isolate:\\s*\\n(?:\\s*\\n)*\\s*${key}: true`).test(patch)) {
+    fail(`预设里 ${key} 的 isolate 丢了 —— 服务会泄漏到根作用域，宿主会拒绝挂载这个预设`)
+  }
+}
+
 // 4b. 预设 id 必须跟发布版一致
 // 会话里存的就是这个 id（record.rows.agentPreset.val）。开发副本跟发布版不一致时，
 // 换一次 bundle 旧会话就恢复不了（"Unknown agent preset: study"）—— 2026-10-31 踩过。
@@ -193,22 +224,21 @@ if (!presetIdMatch) fail("预设里找不到 agent 预设的 id（缩进 8 空�
 else if (presetIdMatch[1] !== 'study-mode')
   fail(`预设 id 必须是 study-mode（开发副本与发布版必须一致，否则换 bundle 旧会话恢复不了），现在是 ${presetIdMatch[1]}`)
 
-// 5. 工具白名单：学习模式只留「读被指名的文件」这一类
+// 5. 插件不许藏用户的工具（2026-11-06 用户定的）
+//    原来这里要求「必须调用 ctx.tools.restrict」+ DENY_TOOLS 白名单 —— 已删除。
+//    理由：① 每个人的 DSH 装的插件不一样，写死的名字清单既禁不全又会误伤；
+//          ② 它压根挡不住素材纪律（ops_* 一个都不在名单里，agent 照样能读文件、跑命令）；
+//    插件只新增自己的工具，不改别人工具的可见性。
 const pluginSource = fs.readFileSync(path.join(root, 'plugin', 'tools.js'), 'utf8')
-if (!pluginSource.includes('tools.restrict')) {
-  fail('插件没有调用 ctx.tools.restrict：学习模式应限制可用工具，素材纪律要变成机制保证')
+// 只看代码，不看注释（注释里可以解释「为什么删掉了白名单」）
+const pluginCode = pluginSource
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/(^|[^:])\/\/.*$/gm, '$1')
+if (/tools\.restrict\s*\(/.test(pluginCode)) {
+  fail('插件又去限制宿主工具了（ctx.tools.restrict）：插件只该新增工具，不该藏用户自己装的工具')
 }
-if (!pluginSource.includes('MUST_KEEP')) {
-  fail('插件缺少 MUST_KEEP（宿主 dsh-ops 接管面不变量清单，缺了会导致 READINESS_BLOCKED）')
-}
-if (!pluginSource.includes('DENY_TOOLS')) {
-  fail('插件缺少 DENY_TOOLS')
-}
-if (pluginSource.includes('KEEP_TOOLS')) {
-  fail('插件里还留着旧的 KEEP_TOOLS 白名单：allow 模式会砍掉宿主接管面导致 agent 不可用，必须用 deny')
-}
-for (const keep of ['ops_replace', 'ops_write_file', 'ops_edit_file', 'ops_diff', 'ops_stat', 'ops_copy', 'ops_move', 'ops_remove']) {
-  if (!pluginSource.includes(keep)) fail(`MUST_KEEP 清单缺少 ${keep}：宿主 hide-official 少了它会 READINESS_BLOCKED`)
+if (/DENY_TOOLS|KEEP_TOOLS|MUST_KEEP/.test(pluginCode)) {
+  fail('插件里还留着工具白名单常量：每个 DSH 装的插件不一样，白名单既禁不全又会误伤')
 }
 
 // 6. 知识库 Web UI 的接线：package.json 的 exports/dsh.client、patch 的全局行、两份 bundle 的契约

@@ -622,69 +622,27 @@ function renderHits(value) {
   return lines.join('\n')
 }
 
-/**
- * 宿主不变量：dsh-ops 的 hide-official 开启时，会检查它接管的官方文件工具是否都有
- * OPS 替身。少了下面任何一个，宿主判定 READINESS_BLOCKED，agent 直接不可用
- *（2026-10-22 实测踩过：一发消息就挂）。这些工具永远不能被限制掉。
- */
 /** 当前主题的命中在排序里加权的系数：只用来压同分档，不能盖过高分答案。 */
 const CURRENT_TOPIC_BOOST = 1.15
 
-export const MUST_KEEP = [
-  'ops_replace',
-  'ops_write_file',
-  'ops_edit_file',
-  'ops_diff',
-  'ops_stat',
-  'ops_copy',
-  'ops_move',
-  'ops_remove',
-]
-
 /**
- * 学习模式不想要的全局工具。
+ * 这里**不再有**工具白名单（2026-11-06 用户定的）。
  *
- * 用 deny 而不是 allow：allow 少写一个名字就整份失效，而且会踩宿主接管面；
- * deny 是「默认保留、点名去掉」，以后新增的宿主工具默认可见，坏不了。
- * ops_* 与 pwsh 属于 dsh-ops 的接管面，一律不列进来。
- * 作用域内注册的工具（web_search / learn_* / todo_write）也不列 —— restrict 遇到
- * scope-local 名字会让整次调用失败。
+ * 原来这里有一份 DENY_TOOLS（三十多个）+ `ctx.tools.restrict({ deny })`，
+ * 意图是「学习模式只留读被指名的文件这一类工具」，把生图/定时器/子代理/记忆/ESR
+ * 这些全局工具从学习模式的作用域里摘掉。**已删除**，两个理由：
+ *
+ * 1) **每个人的 DSH 装的插件不一样** —— 一份写死的名字清单既禁不全（漏掉的照旧可见），
+ *    又会误伤（用户自己装的、同名的工具被顺手摘掉）。插件不该替用户决定他装了什么。
+ * 2) **它压根挡不住素材纪律** —— ops_* 一个都不在名单里，agent 照样能读文件、跑命令、
+ *    改文件。代价（三十多个工具消失）远大于收益。
+ *
+ * 纪律改成两件事，都不碰用户的工具：
+ * - persona 里的提示（〇 素材纪律：工作区里的文件不是知识来源，用户没指名不要去翻）；
+ * - 插件只**新增**自己的工具，不改别人的工具可见性。
+ *
+ * ⚠️ 以后别再加 `ctx.tools.restrict` —— scripts/check.mjs 有闸门盯着（会直接失败）。
  */
-export const DENY_TOOLS = [
-  'workflow',
-  'schedule_create',
-  'schedule_update',
-  'schedule_delete',
-  'schedule_list',
-  'plugin_manager',
-  'generate_image',
-  'edit_image',
-  'generate_video',
-  'generate_video_from_image',
-  'cancel_image_generation_task',
-  'cancel_video_generation_task',
-  'get_image_generation_task',
-  'get_video_generation_task',
-  'subagent',
-  'subagent_fork',
-  'get_goal',
-  'create_goal',
-  'update_goal',
-  'engram_store',
-  'engram_recall',
-  'engram_detail',
-  'esr_task',
-  'esr_claim',
-  'esr_unclaim',
-  'esr_close',
-  'esr_link',
-  'esr_dep',
-  'esr_node',
-  'esr_model',
-  'esr_ready',
-  'esr_status',
-  'esr_gc',
-]
 
 /** 审批等待上限：用户一直没点就当取消，避免工具调用挂死。 */
 const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000
@@ -943,6 +901,8 @@ async function runSave({ ctx, store, args, exec }) {
 }
 
 export function apply(ctx) {
+  // 编辑工具是否已挂上（learn_enable_edit 调过之后一直保持，直到宿主重启）。
+  let editToolsMounted = false
   const store = createStore(resolveRoot())
   // 主题颜色：跟着主题走（建主题时定好的），不同主题不撞色。
   // 卡片投影里带上它，界面就能给每张卡用所属主题的颜色
@@ -1536,11 +1496,15 @@ export function apply(ctx) {
 
   // 改 / 删条目的工具**默认不暴露给模型**（2026-10-23 用户定：「我不说要删改条目
   // 为什么要每次都发过去」）。这两个 schema 每次请求都随 tools 一起发，约 1200 字 ≈ 900 tokens。
-  // 要用时：settings.json 里 kbEditTools=true，或环境变量 DSH_KB_EDIT=1。
+  // 两条开启路径：
+  //   ① settings.json 里 kbEditTools=true，或环境变量 DSH_KB_EDIT=1（全局常开）；
+  //   ② 模型调用 learn_enable_edit —— **用户明确提出要改/删某张卡时才调**
+  //      （2026-11-06 用户定：「默认关，具体提出来了再去主动调用」）。
   const editToolsEnabled = store.getKbEditTools()
 
-  if (editToolsEnabled) {
-    ctx.tools.register({
+  // 把两个编辑工具挂到给定作用域（插件自己的作用域 = 学习模式预设的作用域 ✓）
+  const registerEditTools = target => {
+    target.tools.register({
       name: 'learn_update',
       description:
         '修改库里已有的一条（按 id）：可改正文、标签、出处、适用范围、核实状态等，版本号递增。',
@@ -1596,7 +1560,7 @@ export function apply(ctx) {
       }),
     })
 
-    ctx.tools.register({
+    target.tools.register({
       name: 'learn_delete',
       description:
         '删除库里的一条（按 id）。默认归档（仍可恢复，检索不再返回）；确认要彻底删除时传 hard=true。',
@@ -1632,6 +1596,41 @@ export function apply(ctx) {
       }),
     })
   }
+
+  if (editToolsEnabled) registerEditTools(ctx)
+
+  // 「挂上编辑工具」：用户明确要改/删某张卡时，模型先调它，把 learn_update / learn_delete 挂上。
+  // 这样这两个 schema 只在真要改的那一轮出现，平时不占 token（2026-11-06 用户定 ✓）。
+  ctx.tools.register({
+    name: 'learn_enable_edit',
+    description:
+      '把「修改卡片 / 删除卡片」这两个工具挂上（learn_update / learn_delete）。' +
+      '**只有用户明确要求改某张卡或删某张卡时才调它**，平时不要调。' +
+      '挂上之后用 learn_update / learn_delete 去执行用户的要求。',
+    parameters: toolSchema({
+      reason: { type: 'string', description: '用户原话里的改/删要求（一句话）' },
+    }),
+    output: {
+      schema: { type: 'object' },
+      render: (_args, value) => text(value.message),
+    },
+    execute(args) {
+      if (editToolsMounted) {
+        return { message: '编辑工具已经挂上了，直接用 learn_update / learn_delete 去做。', enabled: true }
+      }
+      try {
+        registerEditTools(ctx)
+        editToolsMounted = true
+        return {
+          message: '已挂上 learn_update / learn_delete，接下来用它们执行用户的要求。',
+          enabled: true,
+          reason: String(args?.reason || ''),
+        }
+      } catch (error) {
+        return { message: '挂不上编辑工具：' + (error?.message || String(error)), enabled: false }
+      }
+    },
+  })
 
   ctx.tools.register({
     name: 'learn_entries',
@@ -1899,53 +1898,8 @@ export function apply(ctx) {
     }),
   })
 
-  // 工具白名单（S1）：学习模式只需要「读被指名的文件」这一类工具。
-  // 其余全局工具（bash / 写文件 / 生图 / 定时器 / 插件管理 / 子代理 / ESR…）在本作用域不可见，
-  // 素材纪律从此是机制保证，不只是提示词里的君子协定。
-  ctx.on('agent/created', function () {
-    // this 可能是 agent 作用域，也可能就是插件所在作用域；两个都试
-    const tools = this?.ctx?.tools ?? ctx.tools
-    if (!tools || typeof tools.restrict !== 'function') return
-    // 只点名去掉全局工具；作用域内注册的工具不受影响，也不许进 deny
-    const deny = DENY_TOOLS.filter(name => {
-      if (MUST_KEEP.includes(name) || name.startsWith('ops_') || name === 'pwsh') return false
-      try {
-        return !!tools.get(name)
-      } catch {
-        return false
-      }
-    })
-    if (!deny.length) return
-    // 安全网：接管面不在就不做限制
-    const missing = MUST_KEEP.filter(name => {
-      try {
-        return !tools.get(name)
-      } catch {
-        return true
-      }
-    })
-    if (missing.length) {
-      console.error('[learning-kb] 宿主接管面缺失（' + missing.join('、') + '），不做工具限制')
-      return
-    }
-    let dispose = null
-    try {
-      dispose = tools.restrict({ deny })
-    } catch (error) {
-      console.error('[learning-kb] 工具限制失败，已放弃：' + error.message)
-      return
-    }
-    // 限制完再确认一次接管面还在；被动过就撤销
-    const broken = MUST_KEEP.filter(name => {
-      try {
-        return !tools.get(name)
-      } catch {
-        return true
-      }
-    })
-    if (broken.length) {
-      console.error('[learning-kb] 工具限制动到了宿主接管面（' + broken.join('、') + '），已撤销')
-      if (typeof dispose === 'function') dispose()
-    }
-  })
+  // 这里**不再限制任何工具**（2026-11-06 用户定的）。
+  // 插件只新增自己的工具，不改用户已有工具的可见性 ——
+  // 每个人的 DSH 装的插件不一样，写死一份 deny 名单既禁不全又会误伤。
+  // 素材纪律靠 persona 提示 + 只读工具（learn_*）引导，不靠藏工具。
 }
